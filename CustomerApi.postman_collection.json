@@ -1,0 +1,132 @@
+{
+	"info": {
+		"_postman_id": "7a1538cd-a14d-4564-8965-1b6ea0ce1542",
+		"name": "CustomerApi",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "GetAllCustomers",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"body": {},
+				"url": {
+					"raw": "http://localhost:64299/api/customer",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "64299",
+					"path": [
+						"api",
+						"customer"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "GetCustomerBasedOnID",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"body": {},
+				"url": {
+					"raw": "http://localhost:64299/api/customer/1001",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "64299",
+					"path": [
+						"api",
+						"customer",
+						"1001"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "SaveCustomer",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \n    \"FirstName\": \"mike\",\n    \"lastName\": \"curran\",\n    \"email\": \"Mike.curran@test.com\",\n    \"phoneNumber\": \"1234567890\",\n    \"occupation\": \"Business\"\n}"
+				},
+				"url": {
+					"raw": "http://localhost:64299/api/customer",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "64299",
+					"path": [
+						"api",
+						"customer"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "UpdateCustomer",
+			"request": {
+				"method": "PUT",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"id\": 1006,\n    \"firstName\": \"Edgakr\",\n    \"lastme\": \"curran\",\n    \"email\": \"Mike.Edgakr@test.com\",\n    \"phoneNumber\": \"1234567890\",\n    \"occupation\": \"Business\"\n}"
+				},
+				"url": {
+					"raw": "http://localhost:64299/api/customer",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "64299",
+					"path": [
+						"api",
+						"customer"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "DeleteCustomer",
+			"request": {
+				"method": "DELETE",
+				"header": [],
+				"body": {},
+				"url": {
+					"raw": "http://localhost:64299/api/customer/1006",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "64299",
+					"path": [
+						"api",
+						"customer",
+						"1006"
+					]
+				}
+			},
+			"response": []
+		}
+	]
+}
