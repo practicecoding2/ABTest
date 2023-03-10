@@ -22,6 +22,8 @@ namespace CustomerWebApi.Controllers
                     "This shouldn't be invoked in non-development environments.");
             }
 
+            
+
             var context = HttpContext.Features.Get<IExceptionHandlerFeature>();
 
             return Problem(
