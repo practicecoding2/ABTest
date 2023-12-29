@@ -1,0 +1,274 @@
+CREATE PROCEDURE [dbo].[ArchiveData]
+
+--====================================================================================--
+--====================================================================================--
+-- Description:	Migrates data (archives) from Active Database table to Archive Database table
+-- Usage:		EXEC CoreTrackArchive.dbo.ArchiveData @Debug = 1
+-- Author:		Roshan Purohit 08/02/2018 
+-- Revision History:
+-- 	Date		Programmer		Description
+--	02/07/2019	Mike Maniatis	Cleaning up the script.
+--====================================================================================--
+--====================================================================================--
+( 
+	@Debug BIT = 0 
+)
+
+AS
+
+SET NOCOUNT ON
+/*
+DECLARE @Debug BIT 
+SELECT @Debug = 0
+*/
+
+IF OBJECT_ID('tempdb..#TablesToArchiveData') IS NOT NULL DROP TABLE #TablesToArchiveData
+IF OBJECT_ID('tempdb..#TableSchema') IS NOT NULL DROP TABLE #TableSchema
+IF OBJECT_ID('tempdb..#TableSchemaArchiveData') IS NOT NULL DROP TABLE #TableSchemaArchiveData	
+
+DECLARE @RecordCounter INT, @err INT, @InfoLogMessage VARCHAR(200), @SPROC_Name VARCHAR(100)
+SELECT @RecordCounter = 0, @err = 0, @InfoLogMessage = '', @SPROC_Name = OBJECT_NAME(@@PROCID) 
+
+DECLARE @TableName VARCHAR(150), @DataBaseName VARCHAR(20), @SchemaName VARCHAR(100), @Sql VARCHAR(max), @ArchiveInsertColumns VARCHAR(8000), @ColumnName VARCHAR(150), @NoColumns INT, 
+		@ArchiveColumn VARCHAR(200), @NoRecordsArchived INT,@ErrorMessage NVARCHAR(4000), @ErrorSeverity INT, @ErrorState INT,@BaseArchiveTableName varchar(150)
+		
+SELECT @Sql = '', @ArchiveInsertColumns = ''
+
+BEGIN TRY 
+
+		SELECT @InfoLogMessage = 'Start: Executing Stored Procedure: ' + @SPROC_Name
+		EXEC CoreTrack.dbo.InsertProcessLog @Level = 'Info',@Logger = 'CoreTrack - Archive',@Message = @InfoLogMessage,@CompName = ''
+
+	CREATE TABLE #TablesToArchiveData (
+			[DatabaseName] VARCHAR(100),
+			[SchemaName] VARCHAR(100),
+			[TableName] VARCHAR(100),
+			[BaseArchiveTableName] varchar(100),
+			[ColumnName] VARCHAR(150) )
+		
+	INSERT INTO #TablesToArchiveData ( [DatabaseName],[SchemaName],[TableName],[BaseArchiveTableName], [ColumnName])
+	SELECT 
+		[DatabaseName] = abt.DatabaseName,
+		[SchemaName] = abt.SchemaName,
+		[TableName] = abt.TableName,
+		[BaseArchiveTableName] = abt.BaseArchiveTableName,
+		[ColumnName] = abt.ColumnName
+	FROM CoreTrackArchive.dbo.ArchiveTable abt WITH(NOLOCK)
+	order by Sortorder asc
+		
+	SELECT @RecordCounter = @@ROWCOUNT
+
+	IF @debug = 1
+		BEGIN
+			SELECT 'Output from #TablesToArchiveData table' AS TablesToArchiveData , (SELECT COUNT(*) FROM #TablesToArchiveData) AS TotalCount
+			SELECT * FROM #TablesToArchiveData
+		END
+		
+	CREATE TABLE #TableSchemaArchiveData  ( 
+		[DBName] NVARCHAR(256),
+		[TableName] NVARCHAR(256),
+		[ColumnID] INT,
+		[ColumnName] NVARCHAR(256),
+		[Type] NVARCHAR(256),
+		[Computed] VARCHAR(30),
+		[Length] INT,
+		[Prec] VARCHAR(5),
+		[Scale]  VARCHAR(5),
+		[Nullable]  VARCHAR(35),
+		[TrimTrailingBlanks]  VARCHAR(35),
+		[FixedLenNullInSource]  VARCHAR(35),
+		[Collation] NVARCHAR(256) )
+
+	WHILE @RecordCounter > 0
+		BEGIN
+			SELECT TOP 1
+				@DataBaseName = [DataBaseName],
+				@SchemaName = SchemaName,
+				@TableName = [TableName],
+				@BaseArchiveTableName = [BaseArchiveTableName],
+				@ColumnName = [ColumnName]
+			FROM #TablesToArchiveData
+
+	-- if table is dropped from Actual Database , then no need to check tables existance in Archive Database
+			IF EXISTS (SELECT 1 FROM CoreTrackArchive.dbo.sysobjects WITH (NOLOCK) WHERE NAME = @tablename AND xtype = 'U')
+			BEGIN 	
+				SELECT @InfoLogMessage = 'Starting: ' + RTRIM(LTRIM(@DataBaseName)) + '.' + RTRIM(LTRIM(@SchemaName)) +'.' + RTRIM(LTRIM(@TableName)) + ' Data Move'
+				EXEC CoreTrack.dbo.InsertProcessLog @Level = 'Info' ,@Logger = 'CoreTrack - Archive',@Message = @InfoLogMessage,@CompName = ''
+				
+				SELECT @Sql = '
+				SELECT 
+					[DBName],
+					[TableName],
+					[ColumnID],
+					[ColumnName],
+					[Type],
+					[Computed],
+					[Length],
+					[Prec],
+					[Scale],
+					[Nullable],
+					[TrimTrailingBlanks],
+					[FixedLenNullInSource],
+					[Collation]
+				FROM ' + RTRIM(LTRIM(@DatabaseName)) + 'Archive.'  + 'dbo.[GetTableSchema]( ''' + RTRIM(LTRIM(@DatabaseName)) + 'Archive.' + RTRIM(LTRIM(@SchemaName)) + '.' +RTRIM(LTRIM(@TableName)) +'''); '
+				
+				INSERT INTO #TableSchemaArchiveData
+				EXEC ( @Sql )
+				
+
+				If @Debug = 1
+				BEGIN
+					Select '-- Output from #TableSchemaArchiveData table' as TableSchemaToArchive, @sql as SqlTorun
+					Select * from #TableSchemaArchiveData
+				END
+					
+			BEGIN TRY 
+				-- step 1: build columns for insert
+					SELECT @Sql = '', @ArchiveInsertColumns = ''
+					
+					SELECT 	@ArchiveInsertColumns = @ArchiveInsertColumns + '[' + LTRIM(RTRIM(tsa.[ColumnName])) + ']' + ', '
+					FROM #TableSchemaArchiveData tsa
+					ORDER BY tsa.ColumnID
+
+					SELECT @ArchiveInsertColumns = SUBSTRING(@ArchiveInsertColumns, 1, LEN(@ArchiveInsertColumns) - 1)
+					
+					SELECT @Sql = 'INSERT INTO ' + RTRIM(LTRIM(@DataBaseName)) + 'Archive.'  + RTRIM(LTRIM(@SchemaName))+ '.' +  RTRIM(LTRIM(@TableName)) + ' ( ' + RTRIM(LTRIM(@ArchiveInsertColumns)) + ')'
+					
+		-- step 2: build columns for select, a different approach to building the string is applied here because we run into issues if the string is greater than 4000 chars as the trick
+		-- to loop on itself (i.e. @v = @v + 'string') code doubles in size w/ each pass
+					SELECT @ArchiveInsertColumns = '', @NoColumns = 1, @ArchiveColumn = ''
+					
+					WHILE @NoColumns BETWEEN ( SELECT MIN(ColumnID) FROM #TableSchemaArchiveData) AND (SELECT  MAX(ColumnID) FROM #TableSchemaArchiveData)
+						BEGIN
+
+							SELECT @ArchiveColumn = '[' + LTRIM(RTRIM(tsa.[ColumnName])) + ']=' + 'b.[' + LTRIM(RTRIM(tsa.[ColumnName])) + ']' + ', '
+							FROM #TableSchemaArchiveData tsa
+							WHERE tsa.ColumnID = @NoColumns
+							ORDER BY tsa.ColumnID
+							
+							
+							SELECT @ArchiveInsertColumns = @ArchiveInsertColumns + @ArchiveColumn
+							
+							SELECT @NoColumns = @NoColumns + 1
+						END
+
+					SELECT @ArchiveInsertColumns = SUBSTRING(@ArchiveInsertColumns, 1, LEN(@ArchiveInsertColumns) - 1)
+					
+					SELECT @Sql = @Sql + ' SELECT ' + RTRIM(LTRIM(@ArchiveInsertColumns))
+					
+					SELECT @Sql = @Sql + ' FROM ' + RTRIM(LTRIM(@DataBaseName)) + '.' + RTRIM(LTRIM(@SchemaName)) + '.' + RTRIM(LTRIM(@TableName)) + ' b '
+				
+			
+					IF @ColumnName IS NOT NULL 
+						BEGIN -- step 3 (optional): when there are join tables then create the join statement
+							SELECT @ArchiveInsertColumns = ''
+
+							SELECT @ArchiveInsertColumns = @ArchiveInsertColumns + 'b.[' + RTRIM(LTRIM(cb.Tbl_Column)) + '] = avs.['  +
+								CASE RTRIM(LTRIM(cb.Tbl_Column))
+									WHEN 'Branch_Number' THEN 'GL_Loc_Key'
+									WHEN 'Branch_Key' THEN 'GL_Loc_Key'
+									WHEN 'SalvageId' THEN CASE WHEN RTRIM(LTRIM(@DataBaseName)) LIKE 'CSA%' THEN 'Salvage_ID' ELSE 'SalvageId' END
+									ELSE RTRIM(LTRIM(cb.Tbl_Column))
+								END + '] AND '
+							FROM [CoreTrack].[dbo].[uf_DelimitedToTable] (@ColumnName, ',') cb
+
+							SELECT @ArchiveInsertColumns = SUBSTRING(@ArchiveInsertColumns, 1, LEN(@ArchiveInsertColumns) - 4)
+
+							SELECT @Sql = @Sql + ' INNER JOIN '+ RTRIM(LTRIM(@DataBaseName)) + 'Archive.' + RTRIM(LTRIM(@SchemaName)) + '.' + RTRIM(LTRIM(@BaseArchiveTableName)) +  ' avs ON ' + @ArchiveInsertColumns
+						END
+				END TRY 
+				BEGIN CATCH
+					SELECT 
+								@ErrorMessage = 'Error Executing Dynamic SQL: ' + RTRIM(LTRIM(@Sql)) + ';' + ' for table: ' + RTRIM(LTRIM(@TableName)) + '; System Error Message: ' + ERROR_MESSAGE(),
+								@ErrorSeverity = ERROR_SEVERITY(),
+								@ErrorState = ERROR_STATE();
+
+					EXEC CoreTrack.dbo.InsertProcessLog @Level = 'Info',@Logger = 'CoreTrack - Archive',@Message = @ErrorMessage,@CompName = ''
+							-- Use RAISERROR inside the CATCH block to return error
+							-- information about the original error that caused
+							-- execution to jump to the CATCH block.
+							RAISERROR (@ErrorMessage, -- Message text.
+								   @ErrorSeverity, -- Severity.
+								   @ErrorState -- State.
+								   );
+								   
+					END CATCH 		
+	
+			EXEC CoreTrack.dbo.InsertProcessLog 	@Level = 'Info',@Logger = 'CoreTrack - Archive',@Message = @Sql,@CompName = ''
+
+				IF @Sql <> ''
+					BEGIN
+						BEGIN TRY  -- step 4: execute the sql statement to move the data from Active to Archive DB
+									SELECT @NoRecordsArchived = 0
+									
+									EXEC ( @Sql )
+									SELECT @NoRecordsArchived = @@ROWCOUNT
+									
+									If @Debug = 1
+										begin
+											SELECT @DatabaseName AS DatabaseName, @SchemaName as SchemaName, @TableName AS TableName,@NoRecordsArchived as NoOfRecordsMoved, @Sql AS TableComparisionFinalSql
+										End
+
+									SELECT @InfoLogMessage = 'Finished: ' + RTRIM(LTRIM(@DataBaseName)) + '.' + RTRIM(LTRIM(@SchemaName)) +'.' + RTRIM(LTRIM(@TableName)) + ' Data Move.  No. Of Records Archived: ' + RTRIM(LTRIM(@NoRecordsArchived))
+									EXEC CoreTrack.dbo.InsertProcessLog @Level = 'Info',@Logger = 'CoreTrack - Archive',@Message = @InfoLogMessage,@CompName = ''
+								
+						END TRY 
+						BEGIN CATCH
+							SELECT 
+								@ErrorMessage = 'Unable to insert into ' + RTRIM(LTRIM(@DataBaseName)) + '.' + RTRIM(LTRIM(@SchemaName)) +'.' + RTRIM(LTRIM(@TableName)) + '- !! System Error Message: ' + ERROR_MESSAGE(),
+								@ErrorSeverity = ERROR_SEVERITY(),
+								@ErrorState = ERROR_STATE();
+
+								EXEC  CoreTrack.dbo.InsertProcessLog @Level = 'Info',@Logger = 'CoreTrack - Archive',@Message = @ErrorMessage,@CompName = ''
+
+							-- Use RAISERROR inside the CATCH block to return error
+							-- information about the original error that caused
+							-- execution to jump to the CATCH block.
+							RAISERROR (@ErrorMessage, -- Message text.
+								   @ErrorSeverity, -- Severity.
+								   @ErrorState -- State.
+								   );
+						END CATCH 
+					END
+
+	END 
+			-- clean up for next pass
+			DELETE FROM [#TableSchemaArchiveData]
+			DELETE FROM #TablesToArchiveData WHERE [TableName] = @TableName AND [DataBaseName] = @DataBaseName
+			SELECT @RecordCounter = @RecordCounter - 1
+ END
+
+		IF OBJECT_ID('tempdb..#TablesToArchiveData') IS NOT NULL DROP TABLE #TablesToArchiveData
+		IF OBJECT_ID('tempdb..#TableSchema') IS NOT NULL DROP TABLE #TableSchema
+		IF OBJECT_ID('tempdb..#TableSchemaArchiveData') IS NOT NULL DROP TABLE #TableSchemaArchiveData	
+	
+END TRY
+BEGIN CATCH
+
+	--EXEC usp_csat_dw_log @SPROC_Name, @InfoLogMessage
+	IF OBJECT_ID('tempdb..#TablesToArchiveData') IS NOT NULL DROP TABLE #TablesToArchiveData
+	IF OBJECT_ID('tempdb..#TableSchema') IS NOT NULL DROP TABLE #TableSchema
+	IF OBJECT_ID('tempdb..#TableSchemaArchiveData') IS NOT NULL DROP TABLE #TableSchemaArchiveData	
+	SELECT 
+		@ErrorMessage = ERROR_MESSAGE(),
+		@ErrorSeverity = ERROR_SEVERITY(),
+		@ErrorState = ERROR_STATE();
+
+		SELECT @InfoLogMessage = 'Error Finishing: ' + RTRIM(LTRIM(@DatabaseName)) + '.' +  RTRIM(LTRIM(@SchemaName)) + '.' + RTRIM(LTRIM(@TableName)) + ' Data Insert'
+        EXEC  CoreTrack.dbo.InsertProcessLog @Level = 'Info',@Logger = 'CoreTrack - Archive',@Message = @ErrorMessage,@CompName = ''
+
+
+	-- Use RAISERROR inside the CATCH block to return error
+	-- information about the original error that caused
+	-- execution to jump to the CATCH block.
+	RAISERROR (@ErrorMessage, -- Message text.
+		   @ErrorSeverity, -- Severity.
+		   @ErrorState -- State.
+		   );
+		   
+END CATCH
+
+SELECT @InfoLogMessage = 'Finish: Executing Stored Procedure: ' + @SPROC_Name
+EXEC  CoreTrack.dbo.InsertProcessLog @Level = 'Info',@Logger = 'CoreTrack - Archive',@Message = @InfoLogMessage,@CompName = ''
+
+SET NOCOUNT OFF
