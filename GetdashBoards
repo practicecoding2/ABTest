@@ -1,0 +1,901 @@
+CREATE PROCEDURE [CoreTrack].[GetDashboardSummary]      
+ 
+(      
+    @UserId varchar(50) = '',      
+ @ServiceTypeId int = NULL,      
+ @FilterId int = 0,      
+ @FilterType varchar(max) = '',      
+ @SaveDashboardDefaultPageFilter bit = 0,      
+ @DashboardDefaultPageFilter varchar(max) = '',      
+    @debug bit = 0      
+)      
+AS      
+      
+BEGIN      
+      
+  /*      
+    --for Debug Purpose       
+     DECLARE @UserId VARCHAR(40)='saleti'       
+  ,@ServiceTypeId INT = 1      
+  ,@FilterId int = 0      
+  ,@FilterType varchar(MAX) = ''      
+  ,@SaveDashboardDefaultPageFilter bit = 0      
+  ,@DashboardDefaultPageFilter varchar(max) = ''       
+  ,@debug bit = 0      
+   */      
+      
+  SET NOCOUNT ON      
+  SET FMTONLY OFF      
+      
+  BEGIN TRY      
+      
+    IF OBJECT_ID('tempdb..#workOrders') IS NOT NULL      
+      DROP TABLE #workOrders      
+    IF OBJECT_ID('tempdb..#statusInfo') IS NOT NULL      
+      DROP TABLE #statusInfo      
+    IF OBJECT_ID('tempdb..#dashboardStatusSummary') IS NOT NULL      
+      DROP TABLE #dashboardStatusSummary      
+    IF OBJECT_ID('tempdb..#RefinerXML') IS NOT NULL      
+      DROP TABLE #RefinerXML      
+    IF OBJECT_ID('tempdb..#OpenWorkOrderCount') IS NOT NULL      
+      DROP TABLE #OpenWorkOrderCount      
+   IF OBJECT_ID('tempdb..#WorkOrderTitleProblemStatus') IS NOT NULL      
+      DROP TABLE #WorkOrderTitleProblemStatus      
+   IF OBJECT_ID('tempdb..#dashboardPrioritySummary') IS NOT NULL      
+      DROP TABLE #dashboardPrioritySummary      
+   IF OBJECT_ID('tempdb..#dashboardLPNotificationCount') IS NOT NULL      
+      DROP TABLE #dashboardLPNotificationCount    
+   IF OBJECT_ID('tempdb..#workorderProviderDoc') IS NOT NULL      
+      DROP TABLE #workorderProviderDoc  
+   IF OBJECT_ID('tempdb..#dashboardPrintTPPackageCount') IS NOT NULL
+      DROP TABLE #dashboardPrintTPPackageCount
+        IF OBJECT_ID('tempdb..#dashboardSPTitleProblemCount') IS NOT NULL
+      DROP TABLE #dashboardSPTitleProblemCount
+         
+      
+    DECLARE @Query nvarchar(max) = ''      
+    , @QueryCount nvarchar(MAX) = ''      
+    , @FilterQuery nvarchar(MAX) = ''      
+    , @RequestXmlHandle int      
+    , @totalOpenWorkOrderCount int = 0      
+ , @sentToAuctionCount int = 0      
+ , @ProviderMappingId int = 0      
+ , @HandlerId VARCHAR(50) = NULL      
+ , @parkedQuery varchar(2000) = ''      
+ , @IsDelegatedHandler [BIT]       
+ , @PriorityCutOffEndUTC DATETIME      
+ , @totalLPCommunicationCount int = 0  
+ , @ProviderDoc int =0  
+ , @totalSPtitleProblemCount int = 0   
+
+    CREATE TABLE #RefinerXML (      
+      Name varchar(100) NULL,      
+      [Values] VARCHAR(100) NULL,      
+   [Text] VARCHAR(250) NULL      
+    )      
+      
+    CREATE TABLE #OpenWorkOrderCount (      
+      WorkOrder int,      
+    )      
+    CREATE TABLE #dashboardLPNotificationCount (      
+      WorkOrder int,      
+    ) 
+	CREATE TABLE #dashboardSPTitleProblemCount (      
+      WorkOrder int,      
+    ) 
+    Create Table #dashboardPrintTPPackageCount
+    (
+    WorkOrderShippingId int
+    )
+    CREATE TABLE #workOrders (      
+      [WorkOrderId] [INT] NULL,      
+      [StatusName] [VARCHAR](500) NULL,      
+       [StateCreatedDate] [DATETIME] NULL,      
+        [FileTypeId] INT NULL 
+    )      
+      
+    CREATE TABLE #statusInfo (      
+      [StatusName] [VARCHAR](500) NULL,      
+      [Count] [INT] NULL      
+    )      
+      
+ CREATE TABLE #dashboardPrioritySummary      
+ (      
+ [StatusName] [VARCHAR](500),      
+ [PriorityCount] INT      
+ )      
+      
+    CREATE TABLE #dashboardStatusSummary (      
+      [StatusId] [INT] NULL,      
+      [StatusName] [VARCHAR](500) NULL,      
+      [Count] [INT] NULL,      
+      [ServiceTypeId] [INT] NULL,      
+      [StatusSortOrder] [INT] NULL,      
+      [SubStatusSortOrder] [INT] NULL,      
+      [IsLink] [BIT] NULL,      
+      [IsIndented] [BIT] NULL,      
+      [IsStatus] [BIT] NULL,      
+   [DefaultWorkOrderDetailTab] [VARCHAR](30),      
+   [PriorityCount] INT,      
+   [ShowPriorityCount] BIT      
+    )      
+      
+ CREATE TABLE #WorkOrderTitleProblemStatus      
+ (      
+ WorkOrderId INT      
+ ,StockNumber INT      
+ ,SalvageId INT      
+ ,HasTitleProblem BIT      
+ )      
+      
+CREATE TABLE #workorderProviderDoc      
+ (      
+ WorkOrderId INT      
+   
+ ,HasTitleProblem BIT   
+ )  
+    --/*--========================== -- Start: Update or Insert into UserReportFilters Table based on Parameter -- ==========================--*/      
+      
+    SELECT      
+      @ServiceTypeId = ISNULL(@ServiceTypeId, 0),      
+      @FilterId = ISNULL(@FilterId, 0),      
+      @FilterType = ISNULL(@FilterType, ''),      
+      @SaveDashboardDefaultPageFilter = ISNULL(@SaveDashboardDefaultPageFilter, 0),      
+      @DashboardDefaultPageFilter = ISNULL(@DashboardDefaultPageFilter, ''),      
+      @UserId = ISNULL(@UserId, '')      
+      
+    IF @SaveDashboardDefaultPageFilter = 1      
+    BEGIN      
+      IF NOT EXISTS (SELECT      
+          1      
+        FROM dbo.UserReportFilters urf WITH (NOLOCK)      
+        WHERE urf.UserId = @UserId      
+        AND urf.ClientApplicationId = 14      
+        AND FilterName = 'CoreTrackDashboardDefaultPage')      
+      BEGIN      
+        INSERT INTO [dbo].[UserReportFilters] (FilterName, UserId, ClientApplicationId, FilterCriteriaXml, IsDefault, CDDate, CdUser, MdDate, MdUser)      
+          VALUES ('CoreTrackDashboardDefaultPage', @UserId, 14, @DashboardDefaultPageFilter, 1, GETDATE(), @UserId, GETDATE(), @UserId)      
+      END      
+      ELSE      
+      BEGIN      
+        UPDATE [dbo].[UserReportFilters]      
+        SET FilterCriteriaXml = @DashboardDefaultPageFilter,      
+            MdDate = GETDATE(),      
+            MdUser = @UserId      
+        WHERE UserId = @UserId      
+        AND ClientApplicationId = 14      
+     AND FilterName = 'CoreTrackDashboardDefaultPage'      
+      END      
+    END      
+      
+    IF NOT EXISTS (SELECT 1      
+      FROM dbo.UserReportFilters urf WITH (NOLOCK)      
+      WHERE FilterName = 'CoreTrackDashboard'      
+      AND urf.UserId = @UserId      
+      AND urf.ClientApplicationId = 14)      
+      AND (@FilterType <> '')      
+    BEGIN      
+      INSERT INTO [dbo].[UserReportFilters] (FilterName, UserId, ClientApplicationId, FilterCriteriaXml, IsDefault, CDDate, CdUser, MdDate, MdUser)      
+        VALUES ('CoreTrackDashboard', @UserId, 14, @FilterType, 1, GETDATE(), @UserId, GETDATE(), @UserId)      
+      
+      SET @FilterId = SCOPE_IDENTITY()      
+    END      
+    ELSE      
+    BEGIN      
+      UPDATE [dbo].[UserReportFilters]      
+      SET FilterCriteriaXml = @FilterType,      
+          MdDate = GETDATE(),      
+          MdUser = @UserId      
+      WHERE FilterName = 'CoreTrackDashboard'      
+      AND (UserReportFilterId = @FilterId      
+      OR UserId = @UserId)      
+      AND ClientApplicationId = 14      
+      AND @FilterType <> ''      
+    END      
+    --/*--========================== -- End: Update or Insert into UserReportFilters Table based on Parameter -- ==========================--*/      
+      
+    IF (@FilterId = 0      
+      AND @FilterType = '')            
+    BEGIN      
+      
+  SET @FilterType = (SELECT TOP 1      
+  CONVERT(varchar(max), urf.FilterCriteriaXml)      
+  FROM dbo.UserReportFilters urf WITH (NOLOCK)      
+  WHERE FilterName = 'CoreTrackDashboard'      
+  AND urf.UserId = @UserId      
+  AND urf.ClientApplicationId = 14)      
+      
+  IF ISNULL(@FilterType, '') = ''--set the default filter when user has none      
+  BEGIN      
+   SET @FilterType = '<ArrayOfFilterCategory xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema"> <FilterCategory> <Name>MYWORKORDER</Name> </FilterCategory> </ArrayOfFilterCategory>'      
+   INSERT INTO [dbo].[UserReportFilters] (FilterName, UserId, ClientApplicationId, FilterCriteriaXml, IsDefault, CDDate, CdUser, MdDate, MdUser)      
+   VALUES ('CoreTrackDashboard', @UserId, 14, @FilterType, 1, GETDATE(), @UserId, GETDATE(), @UserId)      
+  END      
+            
+    END      
+      
+    IF (@FilterType <> '')      
+ BEGIN      
+  EXEC sp_xml_preparedocument @RequestXmlHandle OUTPUT, @FilterType      
+  INSERT INTO #RefinerXML (Name, [Values], [Text])      
+  SELECT      
+   *      
+  FROM OPENXML(@RequestXmlHandle, '/ArrayOfFilterCategory/FilterCategory', 1)      
+  WITH (Name varchar(100) 'Name',      
+  [Values] VARCHAR(100) 'Values',      
+  [Text] VARCHAR(250) 'Text'      
+  )      
+      
+  EXEC SP_XML_REMOVEDOCUMENT @RequestXmlHandle      
+ END      
+      
+    IF NOT EXISTS (SELECT 1 FROM #RefinerXML WHERE Name = 'ALL') --if ALL refiner not selected      
+    BEGIN      
+      IF (NOT EXISTS (SELECT 1 FROM #RefinerXML) OR EXISTS (SELECT 1 FROM #RefinerXML WHERE Name = 'MYWORKORDER'))      
+      BEGIN      
+        SET @FilterQuery = ' AND ' + CASE      
+          WHEN @ServiceTypeId = 3 THEN 'wo.TWOHandlerId' --refer TWO Handler for TWO work orders      
+          ELSE 'wo.HandlerId' END      
+  IF ((Select ISNULL([Values], 'Yes') From #RefinerXML WHERE Name = 'DELEGATE') = 'No' )      
+  BEGIN      
+   SET @FilterQuery = @FilterQuery + ' = ''' + @UserId + ''''      
+  END      
+  ELSE      
+  BEGIN      
+   SET @FilterQuery = @FilterQuery + ' IN (SELECT HandlerId FROM CoreTrack.HandlerDelegateMapping WHERE DelegateId ='''      
+   + @UserId      
+   + ''' AND IsActive = 1 AND ISNULL(ExpirationDate,GETDATE()) >= GETDATE() UNION ALL SELECT ''' + @UserId + ''')'      
+  END      
+      END      
+      
+      ELSE      
+      IF EXISTS (SELECT 1 FROM #RefinerXML WHERE Name = 'MYCUSTOMER')      
+      BEGIN      
+        SET @FilterQuery = ' AND wo.ProviderMappingId IN       
+      (SELECT ProviderMappingId FROM [CoreTrack].[ProviderHandlerMapping] WHERE HandlerId = ''' + @UserId + ''' AND IsActive = 1)'      
+      
+      END      
+    END      
+ -- addedd below if condition to filter if ALL is selected as filter in coretrack dashboard page also some value is selected or not in salvage provider group dropdown.      
+    ELSE      
+    IF EXISTS (SELECT 1 FROM #RefinerXML WITH (NOLOCK) WHERE Name = 'ALL')       
+  AND EXISTS (Select 1 FROM CoreTrack.UserDetails with (nolock) WHERE userid = @UserId and userroleid in (1, 2, 3))--current user is Admin or Supervisor or Auditor      
+    BEGIN      
+ IF EXISTS (SELECT 1 FROM #RefinerXML WITH (NOLOCK) WHERE Name = 'Customer')      
+     BEGIN      
+      
+  SELECT  @ProviderMappingId = Convert(INT, [Values]) FROM #RefinerXML WITH (NOLOCK) WHERE NAME = 'Customer'      
+      
+   IF (ISNULL(@ProviderMappingId, 0) <> 0)      
+      BEGIN             
+            SET @FilterQuery = ' AND wo.ProviderMappingId = ''' + CONVERT(varchar(20), @ProviderMappingId) + ''' '      
+   END      
+  END      
+  ELSE IF EXISTS(SELECT 1 FROM #RefinerXML WITH (NOLOCK) WHERE Name = 'Handler')      
+   BEGIN      
+   SELECT @HandlerId =  ISNULL(Convert(VARCHAR(50), [Values]), '') FROM #RefinerXML WITH (NOLOCK) WHERE NAME = 'Handler'      
+   IF ISNULL(@HandlerId, '') <> ''      
+   BEGIN      
+    SET @FilterQuery = ' AND ' + CASE      
+    WHEN @ServiceTypeId = 3 THEN 'wo.TWOHandlerId' --refer TWO Handler for TWO work orders      
+    ELSE 'wo.HandlerId'      
+    END      
+    + ' IN (SELECT HandlerId FROM CoreTrack.HandlerDelegateMapping WHERE DelegateId ='''      
+    + @HandlerId      
+    + ''' AND IsActive = 1 AND ISNULL(ExpirationDate,GETDATE()) >= GETDATE() UNION ALL SELECT ''' + @HandlerId + ''') '      
+   END       
+   END        
+    END      
+      
+ --Get workorders for a service type alongwith the current statuses      
+    SET @Query =       
+  'SELECT       
+   [WorkOrderId] = vwi.[WorkOrderId],      
+   [StatusName] = [StateInfo],      
+   [StateCreatedDate] = vwi.[StateCreatedDate],      
+   [FileTypeId] = wo.FileTypeId
+  FROM [ProviderServices].[CoreTrack].[vw_workflowinstances] vwi with (nolock)      
+   INNER JOIN CoreTrack.WorkOrders wo with (nolock) ON vwi.WorkOrderId = wo.WorkOrderId      
+  WHERE (wo.isParked is null or wo.isParked = 0)       
+   AND (wo.status in (''Open'', ''Reopened'', ''Cancel Pending''))       
+   AND ((vwi.StateInfo IN (''Wait TWO'') AND wo.ClosedDate IS NULL) OR  vwi.StateInfo <>''Wait TWO'')  
+   AND (' +      
+    CASE      
+     WHEN @ServiceTypeId = 3 THEN 'ISNULL(wo.AltDWorkflow, 0) IN (0, 1)'      
+     ELSE 'ISNULL(wo.AltDWorkflow, 0) <> 1'      
+    END        
+   + ')  
+    AND (' +      
+   CASE      
+    WHEN @ServiceTypeId = 3 THEN 'ISNULL(vwi.IsComplete, 0) IN (0, 1)'      
+    ELSE 'ISNULL(vwi.IsComplete, 0) =0'      
+   END       
+  + ')      
+   AND (' +       
+    CASE      
+     WHEN @ServiceTypeId = 3 THEN '(wo.ServiceTypeId = 3 AND ISNULL(vwi.WorkFlowModuleId, '''') <> 12) OR (wo.ServiceTypeId in (1,2) AND vwi.WorkFlowModuleId = 12)'      
+     ELSE 'wo.ServiceTypeId = ' + CAST(@ServiceTypeId AS varchar(1)) + ' AND ISNULL(vwi.WorkFlowModuleId, '''') <> 12'      
+    END      
+   + ')'      
+       
+ --Apply filters      
+    SET @Query = @Query + ' ' + @FilterQuery      
+       
+ IF(@ServiceTypeId = 1 OR @ServiceTypeId = 2)      
+ BEGIN      
+  SET @Query += ' UNION ALL SELECT       
+      [WorkOrderId] = vw.[WorkOrderId],      
+      [StatusName] = ISNULL((SELECT s.StatusName FROM CoreTrack.[Status] s WHERE s.ServiceTypeId = ' + CAST(@ServiceTypeId AS varchar(1)) + ' AND s.StatusId = 9984),''''),      
+      [StateCreatedDate] = vw.[StateCreatedDate],      
+      [FileTypeId] = wo.FileTypeId      
+      FROM [ProviderServices].[CoreTrack].[vw_workflowinstances] vw with (nolock)      
+      INNER JOIN CoreTrack.WorkOrders wo with (nolock) ON vw.WorkOrderId = wo.WorkOrderId      
+      WHERE vw.IsComplete = 0 AND (wo.status in (''Open'',''Reopened'',''Cancel Pending'')) AND       
+      wo.ServiceTypeId = ' + CAST(@ServiceTypeId AS varchar(1)) + 'AND   ISNULL(wo.AltDWorkflow, 0) <> 1 AND    
+      vw.WorkFlowModuleId = 12 AND vw.stateinfo IN (''Contact Provider'', ''Wait Provider Docs'') '      
+      
+     SET @Query = @Query + ' ' + @FilterQuery      
+ END      
+      
+    --get all open workorder for a service type      
+    SET @QueryCount =       
+  'SELECT DISTINCT       
+   wo.WorkOrderId       
+  FROM [ProviderServices].[CoreTrack].WorkOrders wo WITH(NOLOCK)      
+   inner JOIN ProviderServices.CoreTrack.vw_workflowinstances vwi WITH(NOLOCK)      
+   ON vwi.WorkOrderId = wo.WorkOrderId       
+  WHERE wo.ClosedDate IS NULL       
+  AND (' +      
+   CASE      
+    WHEN @ServiceTypeId = 3 THEN 'ISNULL(wo.AltDWorkflow, 0) IN (0, 1)'      
+    ELSE 'ISNULL(wo.AltDWorkflow, 0) <> 1'      
+   END       
+  + ')  
+   AND (' +      
+   CASE      
+    WHEN @ServiceTypeId = 3 THEN 'ISNULL(vwi.IsComplete, 0) IN (0, 1)'      
+    ELSE 'ISNULL(vwi.IsComplete, 0) =0'      
+   END       
+  + ')     
+  AND (' +       
+   CASE      
+    WHEN @ServiceTypeId = 3 THEN '(wo.ServiceTypeId = 3) OR (wo.ServiceTypeId in (1,2) AND vwi.WorkFlowModuleId = 12) '--get all open workorder 'TWO +  TP/TS following TWO workflow'      
+    ELSE 'wo.ServiceTypeId = ' + CAST(@ServiceTypeId AS varchar(1)) + ' AND vwi.WorkFlowModuleId <> 12 '      
+   END      
+  + ')'
+        
+		
+ --Apply filters to total work orders      
+    SET @QueryCount = @QueryCount + ' ' + @FilterQuery      
+     
+    IF @debug = 1      
+      
+    BEGIN      
+      SELECT      
+        @Query AS '-- @Query --'      
+      SELECT      
+        @QueryCount AS '-- @QueryCount --'      
+    END      
+      
+    INSERT INTO #workOrders       
+    EXEC (@Query)      
+      
+    INSERT INTO #OpenWorkOrderCount      
+    EXEC (@QueryCount)      
+
+ -- Insert park queue count on dashboard, and decide if clickable or not. [islink]      
+ --IF(@ServiceTypeId = 1 OR @ServiceTypeId = 2)      
+ --begin      
+ 
+ SET @Query = 'select       
+      distinct wo.WorkOrderId, [StatusName] = ''Parked'' , NULL AS [StateCreatedDate], wo.FileTypeId
+      from CoreTrack.WorkOrders wo      
+      INNER JOIN ProviderServices.CoreTrack.vw_workflowinstances vw with (nolock) ON wo.WorkOrderId = vw.WorkOrderId      
+      where (wo.isParked = 1) and (wo.status in (''Open'',''Reopened'',''Cancel Pending''))       
+      and (' + CASE      
+      WHEN @ServiceTypeId = 3 THEN '(wo.ServiceTypeId = 3) OR (wo.ServiceTypeId in (1,2) AND vw.WorkFlowModuleId = 12)'      
+      ELSE 'wo.ServiceTypeId = ' + CAST(@ServiceTypeId AS varchar(1)) END      
+      + ')      
+      AND ((vw.WorkFlowModuleId <> 12 AND wo.ServiceTypeId IN (1, 2) AND '+  CAST(@ServiceTypeId AS varchar(1)) +'= wo.ServiceTypeId)       
+      OR (((vw.WorkFlowModuleId = 12 AND wo.ServiceTypeId IN (1, 2)) OR wo.ServiceTypeId = 3) AND '+ CAST(@ServiceTypeId AS varchar(1))+' = 3))       
+      AND ISNULL(wo.AltDWorkflow, 0) = 0  '  
+SET @Query = @Query + ' ' + @FilterQuery      
+ INSERT INTO #workOrders      
+ EXEC (@Query)      
+ --END      
+     
+    SELECT      
+      @totalOpenWorkOrderCount = COUNT(WorkOrder)      
+    FROM #OpenWorkOrderCount      
+       
+ IF @ServiceTypeId = 1 --Check Title Problem status Only for TP work orders      
+ BEGIN      
+  --start of get work orders under status 2210 - Review Auction Problem Owner Docs      
+  INSERT INTO #WorkOrderTitleProblemStatus      
+  (      
+  WorkOrderId       
+  ,StockNumber       
+  ,SalvageId      
+  )      
+  Select       
+  wo.WorkOrderId      
+  ,vd.StockNumber      
+  ,( SELECT TOP 1 s.salvage_id       
+   FROM mrt_asap_rep.dbo.salvage s WITH (NOLOCK)       
+   INNER JOIN mrt_asap_rep.dbo.Salvage_INFO si WITH (NOLOCK)       
+   ON s.salvage_id = si.salvage_id       
+   WHERE s.Stock_Number = vd.StockNumber       
+   ORDER BY si.assignment_datetime DESC      
+  )      
+  FROM #workOrders wo      
+  INNER JOIN ProviderServices.CoreTrack.WorkOrderVehicleDetails vd WITH (NOLOCK) ON wo.WorkOrderId = vd.WorkOrderId      
+  WHERE StatusName IN ('Review Owner Docs', 'Review LH Final Docs')        
+  AND ISNULL(vd.StockNumber, 0) <> 0      
+         
+    UPDATE wtps      
+  SET wtps.HasTitleProblem = CASE WHEN       
+          (SELECT      
+          TOP 1 sspd.Is_Active      
+          FROM MRT_ASAP_Rep.dbo.Salvage_SP_Program_Detail sspd WITH (NOLOCK)      
+          WHERE sspd.Salvage_Provider_Program_ID = 1 AND wtps.SalvageId = sspd.Salvage_ID) = 1       
+          AND ( SELECT count(1)       
+            FROM  MRT_ASAP_Rep.dbo.Salvage_Title_Problem stp  WITH (NOLOCK)      
+            INNER  JOIN MRT_ASAP_Rep.dbo.Title_Problem tp WITH (NOLOCK)      
+            ON stp.Title_Problem_ID= tp.Title_Problem_ID      
+            WHERE stp.Salvage_ID= wtps.SalvageId       
+            AND tp.Title_Problem_Category_Code='SP'      
+            AND stp.Resolved_DateTime IS NULL       
+            AND stp.Status_Code= 'ACT'                 
+            ) > 0      
+          THEN 1 ELSE 0 END      
+  FROM #WorkOrderTitleProblemStatus wtps      
+      
+   UPDATE wo      
+   SET [StatusName] = (SELECT TOP 1 StatusName From ProviderServices.CoreTrack.[Status] s with (nolock) where s.servicetypeid = @ServiceTypeId AND StatusId = 2210)      
+   FROM #workOrders wo      
+   INNER JOIN  #WorkOrderTitleProblemStatus wtps on wo.WorkOrderId = wtps.WorkOrderId aND wtps.HasTitleProblem = 1      
+   WHERE StatusName IN ('Review Owner Docs' ,'Review LH Final Docs')        
+  --end of get work orders under status 2210 - Review Auction Problem Owner Docs      
+      
+  ;With DuplicateRowsCTE AS (      
+   Select *,ROW_NUMBER() OVER(Partition By WorkOrderId Order by WorkOrderId) as RowNumber        
+   from #workOrders      
+   where StatusName = 'Review Auction Problem Owner Docs'      
+  )      
+  DELETE from DuplicateRowsCTE where ROWNUMBER >1      
+  
+  
+  ;With WorkOrderDetailTitleProblemDetail(  
+    Salvage_ID   
+    ,Total) AS  
+   (SELECT stp.Salvage_ID, count(stp.Salvage_ID) AS total  
+    FROM MRT_ASAP_Rep.dbo.Salvage_Title_Problem stp WITH (NOLOCK)  
+    INNER JOIN MRT_ASAP_Rep.dbo.Title_Problem tp WITH (NOLOCK) ON stp.Title_Problem_ID = tp.Title_Problem_ID  
+    WHERE tp.Title_Problem_Category_Code = 'SP' AND stp.Resolved_DateTime IS NULL AND stp.Status_Code = 'ACT'  
+    GROUP BY stp.Salvage_ID)  
+  
+    insert into #workorderProviderDoc(WorkOrderId,HasTitleProblem)  
+    SELECT wo.WorkOrderId   
+      
+    , CASE   
+     WHEN sspd.Is_Active = 1 AND ct.total > 0  
+      THEN 1  
+     ELSE 0  
+     END  
+   FROM #workOrders wo  
+   INNER JOIN ProviderServices.CoreTrack.WorkOrderVehicleDetails vd WITH (NOLOCK) ON wo.WorkOrderId = vd.WorkOrderId  
+   LEFT JOIN mrt_asap_rep.dbo.salvage s WITH (NOLOCK) ON s.Stock_Number = vd.StockNumber  
+   LEFT JOIN MRT_ASAP_Rep.dbo.Salvage_SP_Program_Detail sspd WITH (NOLOCK) ON s.salvage_id = sspd.Salvage_ID  
+   LEFT JOIN WorkOrderDetailTitleProblemDetail ct ON ct.Salvage_ID = s.salvage_id  
+   WHERE StatusName IN ('Review Provider Docs')  
+    AND ISNULL(vd.StockNumber, 0) <> 0  
+   
+     
+    
+ select @ProviderDoc =count(workorderid) from #workorderProviderDoc where HasTitleProblem=1  
+ END    
+  
+  
+ SELECT       
+ @PriorityCutOffEndUTC = EndTime      
+ FROM providerservices.[CoreTrack].[GetStatusPriorityTimeOffsetLimits]()      
+       
+  
+  
+    --** Extra Temp Table is Created to Avoid Grouping on VIEW.      
+    INSERT INTO #statusInfo      
+      SELECT      
+        [StatusName] = [StatusName],      
+        [Count] = COUNT(WorkOrderId)      
+      FROM #workOrders wo WITH (NOLOCK)      
+      GROUP BY wo.[StatusName]     
+     
+    
+      
+   IF @PriorityCutOffEndUTC IS NOT NULL      
+   BEGIN      
+    INSERT INTO #dashboardPrioritySummary (StatusName, PriorityCount)      
+    SELECT      
+   [StatusName] = [StatusName],      
+   [Count] = COUNT(WorkOrderId)      
+    FROM #workOrders wo WITH (NOLOCK)      
+    WHERE wo.[StatusName] IN (SELECT s.[StatusName] FROM ProviderServices.CoreTrack.[Status] s WITH (NOLOCK) WHERE s.ShowPriorityCount = 1)      
+    AND wo.StateCreatedDate <= @PriorityCutOffEndUTC      
+    GROUP BY wo.[StatusName]         
+   END      
+   ----In Details ProviderDoc Storeproc exclude hastitleproblem workorder  
+    IF @ServiceTypeId = 1  
+   begin  
+   update #statusInfo  
+   set [count] =[count]-@ProviderDoc ----In Details Storeproc exclude hastitleproblem workorder  
+   where [StatusName] IN ('Review Provider Docs')  
+  
+   update #dashboardPrioritySummary  
+    set PriorityCount =PriorityCount-@ProviderDoc  
+    where [StatusName] IN ('Review Provider Docs')  
+   End      
+  
+    --/*--========================== --End: common queries to get Dashboard Summay -- ==========================--*/      
+      
+    IF @debug = 1      
+    BEGIN      
+        SELECT      
+        '#workOrders'      
+      SELECT      
+        *      
+      FROM #workOrders      
+      SELECT      
+        '#statusInfo'      
+      SELECT      
+        *      
+      FROM #statusInfo     
+    END      
+ 
+    INSERT INTO #dashboardStatusSummary      
+      SELECT      
+        [StatusId] = s.StatusId,      
+        [StatusName] = COALESCE(s.AliasStatusName, s.StatusName),      
+        [Count] = ISNULL(si.[Count], 0),      
+        [ServiceTypeId] = ISNULL(s.ServiceTypeId, 0),      
+        [StatusSortOrder] = ISNULL(s.StatusSortOrder, 0),      
+        [SubStatusSortOrder] = ISNULL(s.SubStatusSortOrder, 0),      
+        [IsLink] =      
+                  CASE      
+                    WHEN ISNULL(si.[Count], 0) > 0 THEN 1      
+                    ELSE 0      
+                  END,      
+        [IsIndented] = 0,      
+        [IsStatus] =      
+                    CASE      
+                      WHEN ISNULL(s.StatusQuestionId, 0) > 0 THEN 1      
+                      ELSE 0      
+                    END,      
+     s.DefaultWorkOrderDetailTab,      
+  PriorityCount = dps.PriorityCount,      
+  ShowPriorityCount = s.ShowPriorityCount      
+      FROM [ProviderServices].[CoreTrack].[Status] s WITH (NOLOCK)      
+      LEFT JOIN #statusInfo si ON si.StatusName = s.StatusName      
+   LEFT JOIN #dashboardPrioritySummary dps ON s.StatusName = dps.StatusName      
+      WHERE s.ServiceTypeId = @ServiceTypeId and ISNULL(s.WorkFlowModuleId, '') <> 13  
+      AND s.StatusName NOT IN('Wait Alt-D','Prepare Alt-D')
+         
+    --/*--========================== --Start: Invalid Status -- ==========================--*/  
+         DECLARE @TotalInvalidStatusCount INT =0
+	SELECT @TotalInvalidStatusCount = COUNT(DISTINCT vw.workorderid) FROM 
+    --providerservices.coretrack.workorders 
+    #workorders wo WITH (nolock)
+		INNER JOIN providerservices.coretrack.vw_workflowinstances vw WITH(nolock) ON wo.workorderid = vw.workorderid 
+		LEFT JOIN providerservices.coretrack.status s WITH (nolock) ON vw.stateinfo = s.statusname 
+         LEFT JOIN #dashboardPrioritySummary dps ON s.StatusName = dps.StatusName  
+		WHERE  1 = 1 AND vw.IsComplete = 0 
+		AND vw.StateInfo NOT IN (
+                     'Owner and LH bypass'
+                     ,'Owner and LH bypass, wait Provider docs'
+                     ,'Owner bypass, wait LH and Provider docs'
+                     ,'Wait All Docs' 
+                     ,'Parallel flows'
+                     ,'Parallel Flows Reopen'
+                     ,'Payments Required Parallel Flows'
+                     ,'Return to TP/TS Workflow '
+                     ,'Docs Required Parallel Flows' ) 
+		AND vw.stateinfo NOT IN (SELECT statusname FROM   providerservices.coretrack.status s WITH(nolock))      	  
+		
+    UPDATE #dashboardStatusSummary      
+    SET [Count] = @TotalInvalidStatusCount,
+        [IsLink] =      
+                  CASE      
+                    WHEN @TotalInvalidStatusCount > 0 THEN 1      
+                    ELSE 0      
+                  END  
+    WHERE [StatusId] = 61401 --  [StatusName] = 'Invalid Status'
+
+    --/*--========================== --End: Invalid Status -- ==========================--*/ 
+
+    --/*--========================== --Start: Total OPEN WORK ORDERS -- ==========================--*/      
+      
+    UPDATE #dashboardStatusSummary      
+    SET [Count] = @totalOpenWorkOrderCount,      
+        [IsLink] =      
+                  CASE      
+                    WHEN @totalOpenWorkOrderCount > 0 THEN 1      
+                    ELSE 0      
+                  END      
+    WHERE [StatusId] = 9995 --  [StatusName] = 'TOTAL OPEN WORK ORDERS'      
+      
+      
+    --/*--========================== --End: Total OPEN WORK ORDERS -- ==========================--*/      
+    
+   --================================Start Lp Communication ==============================================  
+              declare @QueryCountforLP varchar (2000)  
+              --get all open workorder for a service type      
+            SET @QueryCountforLP =       
+          'SELECT        
+           distinct lp.WorkOrderLoanPayoffNotesId      
+          FROM [ProviderServices].[CoreTrack].[vw_workflowinstances] vwi WITH(NOLOCK)      
+           RIGHT JOIN ProviderServices.CoreTrack.WorkOrders wo WITH(NOLOCK)      
+           ON vwi.WorkOrderId = wo.WorkOrderId       
+           inner JOIN CoreTrack.WorkOrderLoanPayoffNotes LP on wo.WorkOrderId =LP.WorkOrderId  
+          WHERE vwi.IsComplete = 0   
+          and    LP.ReadIndicator  =0  
+          AND wo.ClosedDate IS NULL       
+          AND (' +      
+           CASE      
+            WHEN @ServiceTypeId = 3 THEN 'ISNULL(wo.AltDWorkflow, 0) IN (0, 1)'      
+            ELSE 'ISNULL(wo.AltDWorkflow, 0) <> 1'      
+           END       
+          + ')      
+          AND (' +       
+           CASE      
+            WHEN @ServiceTypeId = 3 THEN '(wo.ServiceTypeId = 3) OR (wo.ServiceTypeId in (1,2) AND vwi.WorkFlowModuleId = 12) '--get all open workorder 'TWO +  TP/TS following TWO workflow'      
+            ELSE 'wo.ServiceTypeId = ' + CAST(@ServiceTypeId AS varchar(1)) + ' AND vwi.WorkFlowModuleId <> 12 '      
+           END      
+          + ')'      
+  
+          SET @QueryCountforLP = @QueryCountforLP + ' ' + @FilterQuery     
+  
+           INSERT INTO #dashboardLPNotificationCount     
+            EXEC (@QueryCountforLP)     
+  
+            --Apply filters to total work orders      
+      
+                
+           Declare @statusforLP    int  
+           select distinct @statusforLP   = StatusId from CoreTrack.Status where StatusName='LP Communications'  
+           SELECT @totalLPCommunicationCount = COUNT(WorkOrder)      
+           FROM #dashboardLPNotificationCount  
+                   
+           UPDATE #dashboardStatusSummary SET [Count] = @totalLPCommunicationCount,  
+           [IsLink] =CASE WHEN @totalLPCommunicationCount > 0   
+                     THEN 1  
+                     ELSE 0    
+                     END  WHERE [StatusId] = @statusforLP  
+  
+  ------==================================End Lp COmmunication --================================================  
+ ------==================================Start Print Assemble TP Package --================================================
+		DECLARE @CntPrintAsmbleTPPKG INT = 0;
+		DECLARE @statusforTPPKG INT
+		--DECLARE @ToggleSwitch INT = 0;
+        DECLARE @QueryPrintAssemblePkg Varchar(MAX)
+		
+		SELECT DISTINCT @statusforTPPKG = StatusId
+			FROM CoreTrack.STATUS
+			WHERE StatusName = 'Print/Assemble TP Package'
+
+                SET @QueryPrintAssemblePkg = ' SELECT  DISTINCT wos.WorkOrderShippingId 
+				FROM  ProviderServices.CoreTrack.WorkOrders wo WITH(NOLOCK)   
+			    INNER JOIN ProviderServices.CoreTrack.WorkOrderShippings wos  ON wos.WorkOrderId = wo.WorkOrderId			 
+			    LEFT JOIN ProviderServices.CoreTrack.ShippingFedex fed ON fed.WorkOrderShippingId = wos.WorkOrderShippingId
+			    LEFT JOIN ProviderServices.CoreTrack.ShippingUsps usp ON usp.WorkOrderShippingId = wos.WorkOrderShippingId                
+		   WHERE  1= CASE    
+            WHEN ' + CAST(@ServiceTypeId AS VARCHAR(1)) + ' = 3 and ISNULL(wo.AltDWorkflow, 0) IN (0, 1)  THEN   1
+			when ' + CAST(@ServiceTypeId AS VARCHAR(1)) + ' <> 3 and ISNULL(wo.AltDWorkflow, 0) <> 1   THEN 1
+           END ' + ' And 
+       1= CASE    
+            WHEN ' + CAST(@ServiceTypeId AS VARCHAR(1)) + ' = 3 and ((wo.ServiceTypeId = 3) OR (wo.ServiceTypeId in (1,2)))  THEN   1
+            when ' + CAST(@ServiceTypeId AS VARCHAR(1)) + ' <> 3 and (wo.ServiceTypeId = ' + CAST(@ServiceTypeId AS VARCHAR(1)) + 
+					') THEN 1
+           END
+		   AND (usp.PrintingStatusIndicator = 1 OR fed.PrintingStatusIndicator = 1)'+ @FilterQuery   
+		
+
+
+          		 print(@QueryPrintAssemblePkg)
+              INSERT INTO #dashboardPrintTPPackageCount     
+                EXEC (@QueryPrintAssemblePkg)     
+            
+            SELECT @CntPrintAsmbleTPPKG = COUNT(WorkOrderShippingId)      
+           FROM #dashboardPrintTPPackageCount  
+         
+			UPDATE #dashboardStatusSummary
+			SET [Count] = @CntPrintAsmbleTPPKG
+				,[IsLink] = CASE 
+					WHEN @CntPrintAsmbleTPPKG >= 0
+						THEN 1
+					ELSE 0
+					END
+			WHERE [StatusId] = @statusforTPPKG
+ ------==================================End Print Assemble TP Package --================================================  
+   --================================Start SP Title Problem ==============================================  
+         
+         INSERT INTO #dashboardSPTitleProblemCount
+         SELECT  distinct  wo.WorkOrderId
+                   FROM #workOrders wo
+                   inner join [ProviderServices].[CoreTrack].[WorkOrderVehicleDetails] wv WITH(NOLOCK) ON wo.workorderid = wv.workorderid
+         		   inner join  MRT_ASAP_Rep.dbo.Salvage s on s.Stock_Number = COALESCE(NULLIF(wv.BillingStockNumber,0), wv.StockNumber)
+         		   inner join providerservices.AIM.SalvageTitleProblems stp on stp.SalvageId  = s.Salvage_ID
+         		   inner join ProviderServices.AIM.TitleProblemList tpl on tpl.TitleProblemId = stp.TitleProblemID
+         		   where tpl.TitleProblemCategoryCode='SP' and stp.ResolvedDateTime is null
+         
+
+        IF @debug = 1      
+        BEGIN      
+            SELECT  '#dashboardSPTitleProblemCount'      
+          SELECT      
+            *      
+          FROM #dashboardSPTitleProblemCount 
+        END
+         --Apply filters to total work orders 
+         DECLARE @SPTitleProblemStatusID INT
+         
+         SELECT DISTINCT @SPTitleProblemStatusID = StatusId
+         FROM CoreTrack.STATUS
+         WHERE StatusName = 'SP Title Problem'
+         
+         SELECT @totalSPtitleProblemCount = COUNT(WorkOrder)
+         FROM #dashboardSPTitleProblemCount
+         
+         UPDATE #dashboardStatusSummary
+         SET [Count] = @totalSPtitleProblemCount
+         	,[IsLink] = CASE 
+         		WHEN @totalSPtitleProblemCount > 0
+         			THEN 1
+         		ELSE 0
+         		END
+         WHERE [StatusId] = @SPTitleProblemStatusID
+  
+  ------==================================End  SP Title Problem --================================================  
+  
+  
+  
+  
+  
+      
+ --/*--========================== --Start: Get Sent To Auction count for TP and TS -- ==========================--*/      
+ IF(@ServiceTypeId = 1 OR @ServiceTypeId = 2)      
+ BEGIN      
+  SET @Query = 'SELECT       
+       [WorkOrderId] = vwi.[WorkOrderId],      
+       [StatusName] = [StateInfo],      
+       [StateCreatedDate] = vwi.[StateCreatedDate],      
+       [FileTypeId] = wo.FileTypeId
+       FROM [ProviderServices].[CoreTrack].[vw_workflowinstances] vwi with (nolock)      
+       INNER JOIN CoreTrack.WorkOrders wo with (nolock) ON vwi.WorkOrderId = wo.WorkOrderId      
+       INNER JOIN (Select Top 1 StatusName from CoreTrack.Status where StatusId = 7100) s ON s.StatusName = vwi.[StateInfo]      
+       WHERE (wo.isParked is null or wo.isParked = 0) and (wo.status in (''Open'',''Reopened'',''Cancel Pending'')) AND       
+       wo.ServiceTypeId in (1,2) AND ISNULL(vwi.WorkFlowModuleId, '''') <> 12'      
+  --Apply filters      
+  SET @Query = @Query + ' ' + @FilterQuery      
+      
+  DELETE FROM #workOrders      
+      
+  INSERT INTO #workOrders      
+  EXEC (@Query)      
+      
+  SELECT      
+    @sentToAuctionCount = COUNT(WorkOrderId)      
+  FROM #workOrders      
+      
+  UPDATE #dashboardStatusSummary      
+  SET [Count] = @sentToAuctionCount,      
+   [IsLink] =      
+       CASE      
+      WHEN @sentToAuctionCount > 0 THEN 1      
+      ELSE 0      
+       END      
+  WHERE [StatusId] = 7100      
+ END      
+    --/*--========================== --End: Get Sent To Auction count for TP and TS -- ==========================--*/      
+       
+    --** FINAL SELECT Statement      
+    SELECT      
+      [StatusId],      
+      [StatusName],      
+      [Count],      
+      [ServiceTypeId],      
+      [StatusSortOrder],      
+      [SubStatusSortOrder]      
+      --,[CssClassName]      
+      ,      
+      [IsLink],      
+      [IsIndented],      
+      [IsStatus],      
+      ISNULL((SELECT TOP 1      
+        urf.UserReportFilterId      
+      FROM dbo.[UserReportFilters] urf WITH (NOLOCK)      
+      WHERE FilterName = 'CoreTrackDashboard'      
+      AND urf.UserId = @UserId      
+      AND IsDefault = 1      
+      AND ClientApplicationId = 14), 0) AS FilterId,      
+      ISNULL((SELECT TOP 1      
+        CONVERT(varchar(max), urf.FilterCriteriaXml)      
+      FROM dbo.[UserReportFilters] urf WITH (NOLOCK)      
+      WHERE FilterName = 'CoreTrackDashboard'      
+      AND urf.UserId = @UserId      
+      AND IsDefault = 1      
+      AND ClientApplicationId = 14), '') AS FilterType,      
+   DefaultWorkOrderDetailTab,         
+   ISNULL(PriorityCount, 0) AS PriorityCount,      
+   ISNULL(ShowPriorityCount,0) AS ShowPriorityCount      
+    FROM #dashboardStatusSummary WITH (NOLOCK)      
+    WHERE StatusId IS NOT NULL      
+    AND StatusSortOrder > 0      
+    ORDER BY [StatusSortOrder], [SubStatusSortOrder]      
+ If EXISTS(SELECT HandlerId FROM CoreTrack.HandlerDelegateMapping WHERE DelegateId =@UserId AND IsActive = 1 AND CONVERT(DATE, ISNULL(ExpirationDate,GETDATE())) >= CONVERT(DATE, GETDATE()) )      
+ BEGIN      
+ set  @IsDelegatedHandler=1      
+ end      
+      
+ select isnull(@IsDelegatedHandler,0) as IsDelegatedHandler      
+      
+ IF OBJECT_ID('tempdb..#workOrders') IS NOT NULL      
+      DROP TABLE #workOrders      
+    IF OBJECT_ID('tempdb..#statusInfo') IS NOT NULL      
+      DROP TABLE #statusInfo      
+    IF OBJECT_ID('tempdb..#dashboardStatusSummary') IS NOT NULL      
+      DROP TABLE #dashboardStatusSummary      
+    IF OBJECT_ID('tempdb..#RefinerXML') IS NOT NULL      
+      DROP TABLE #RefinerXML      
+    IF OBJECT_ID('tempdb..#OpenWorkOrderCount') IS NOT NULL      
+      DROP TABLE #OpenWorkOrderCount      
+  IF OBJECT_ID('tempdb..#WorkOrderTitleProblemStatus') IS NOT NULL      
+      DROP TABLE #WorkOrderTitleProblemStatus      
+  IF OBJECT_ID('tempdb..#dashboardPrioritySummary') IS NOT NULL      
+      DROP TABLE #dashboardPrioritySummary         
+  IF OBJECT_ID('tempdb..#dashboardLPNotificationCount') IS NOT NULL      
+      DROP TABLE #dashboardLPNotificationCount     
+  IF OBJECT_ID('tempdb..#workorderProviderDoc') IS NOT NULL      
+      DROP TABLE #workorderProviderDoc     
+  IF OBJECT_ID('tempdb..#dashboardPrintTPPackageCount') IS NOT NULL      
+      DROP TABLE #dashboardPrintTPPackageCount  
+      
+  END TRY      
+      
+  BEGIN CATCH      
+      
+    IF OBJECT_ID('tempdb..#workOrders') IS NOT NULL      
+      DROP TABLE #workOrders      
+    IF OBJECT_ID('tempdb..#statusInfo') IS NOT NULL      
+      DROP TABLE #statusInfo      
+    IF OBJECT_ID('tempdb..#dashboardStatusSummary') IS NOT NULL      
+      DROP TABLE #dashboardStatusSummary      
+    IF OBJECT_ID('tempdb..#RefinerXML') IS NOT NULL      
+      DROP TABLE #RefinerXML      
+    IF OBJECT_ID('tempdb..#OpenWorkOrderCount') IS NOT NULL      
+      DROP TABLE #OpenWorkOrderCount      
+    IF OBJECT_ID('tempdb..#WorkOrderTitleProblemStatus') IS NOT NULL      
+      DROP TABLE #WorkOrderTitleProblemStatus      
+    IF OBJECT_ID('tempdb..#dashboardPrioritySummary') IS NOT NULL      
+      DROP TABLE #dashboardPrioritySummary    
+                  
+    IF OBJECT_ID('tempdb..#dashboardLPNotificationCount') IS NOT NULL      
+      DROP TABLE #dashboardLPNotificationCount    
+     
+   IF OBJECT_ID('tempdb..#workorderProviderDoc') IS NOT NULL      
+      DROP TABLE #workorderProviderDoc  
+     IF OBJECT_ID('tempdb..#dashboardPrintTPPackageCount') IS NOT NULL      
+      DROP TABLE #dashboardPrintTPPackageCount  
+      
+    DECLARE @ErrMessage varchar(max);      
+    DECLARE @ErrorSeverity int;      
+    DECLARE @ErrorState int;      
+      
+    SELECT      
+      @ErrMessage = ERROR_MESSAGE(),      
+      @ErrorSeverity = ERROR_SEVERITY(),      
+      @ErrorState = ERROR_STATE();      
+      
+    RAISERROR (@ErrMessage, @ErrorSeverity, @ErrorState);      
+  END CATCH      
+      
+      
+END  
