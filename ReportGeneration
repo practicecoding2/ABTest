@@ -1,0 +1,411 @@
+CREATE PROCEDURE [dbo].[GetClientApplicationAdHocCsvReportsData]
+
+--====================================================================================--
+--====================================================================================--
+-- Description:	SP runs the sql query stored in table and sends an email to recepients the data as an HTML
+-- Usage:		EXEC ProviderServices.dbo.GetClientApplicationAdHocCsvReportsData @ClientApplicationAdHocReportId = 4, @Debug = 1
+-- Author:		Roshan Purohit 08/02/2019
+-- Revision History:
+-- 	Date		Programmer		Description
+-- 07/202022	Roshan Purohit	Frequency, NoOfMinutes and other misc changes
+--====================================================================================--
+--====================================================================================--
+( 
+	@ClientApplicationAdHocReportId INT = 0,
+	@Debug BIT = 0
+)
+
+AS
+
+SET NOCOUNT ON
+
+IF OBJECT_ID('tempdb..#ClientApplicationAdHocCsvReportsData') IS NOT NULL DROP TABLE #ClientApplicationAdHocCsvReportsData
+IF OBJECT_ID('tempdb..#ColumnResults') IS NOT NULL DROP TABLE #ColumnResults
+IF OBJECT_ID('tempdb..#DataResult') IS NOT NULL DROP TABLE #DataResult
+IF OBJECT_ID('tempdb..#FinalOutput') IS NOT NULL DROP TABLE #FinalOutput	
+
+--Declare @debug INT = 1
+
+
+DECLARE @RecordCounter INT, @err INT, @InfoLogMessage VARCHAR(200), @SPROC_Name VARCHAR(100)
+SELECT @RecordCounter = 0, @err = 0, @InfoLogMessage = '', @SPROC_Name = ISNULL(OBJECT_NAME(@@PROCID) ,'')
+DECLARE @TableName VARCHAR(150), @ErrorMessage NVARCHAR(4000), @ErrorSeverity INT, @ErrorState INT,@ServerName VARCHAR(100),@Environment VARCHAR(100),@LogMessage VARCHAR(MAX) = '',@Level VARCHAR(100) = 'Info',
+@Logger VARCHAR(MAX) = 'Client Application Ad Hoc CSV Reporting'
+
+declare @ToEmailAddresses VARCHAR(MAX), @FROMEmailAddress VARCHAR(MAX), @BaseSubject VARCHAR(MAX), @BaseMessage VARCHAR(MAX)
+
+SELECT @FROMEmailAddress= (SELECT parametervalue FROM providerservices.dbo.ClientAppParms with(nolock) WHERE Method = 'Logging' and ParameterName = 'MonitorSENDer')
+
+DECLARE @Today DATETIME = CAST(CAST(GETDATE() AS DATE) AS DATETIME)
+declare @CurrentRunTime DATETIME = getdate()
+
+DECLARE @EnvironmentInfo TABLE (
+		FirstLetterofEnvironmentName VARCHAR(100),
+		ThreePartEnvironmentName VARCHAR(100),
+		FullEnvironmentName VARCHAR(100),
+		ServerName VARCHAR(100),
+		ServerAliasName VARCHAR(100)
+		)
+INSERT INTo @EnvironmentInfo
+SELECT * FROM ProviderServices.dbo.GetEnvironmentInformation()
+
+	
+BEGIN TRY 
+
+IF @Debug = 1
+	BEGIN
+		SELECT 'Output FROM @EnvironmentInfo table',* FROM @EnvironmentInfo
+	END
+
+SELECT @BaseSubject = (SELECT FullEnvironmentName FROM @EnvironmentInfo) + ' : <%CustomizedSubject%> ' + Convert(VARCHAR(100), getdate(), 101)
+
+SELECT @BaseMessage  = 'Environment - <b>' + (SELECT FullEnvironmentName FROM @EnvironmentInfo) +
+	'</b><br/><br/> Server Name - <b>' + (SELECT ServerName FROM @EnvironmentInfo) + '</b><br/> Server Alias Name - <b>' + (SELECT ServerAliasName FROM @EnvironmentInfo) +
+	'</b><br/> Database Name - <b>ProviderServices
+	 </b><br/> Stored Procedure Name - <b>dbo.' + ISNULL(@SPROC_Name,'') +
+	'</b><br/> Table Name and Query  - <b>SELECT * FROM ProviderServices.dbo.ClientApplicationAdHocReports WHERE ExporttoCSV = 1 order by 1 desc </b> <br/>'
+
+SELECT @InfoLogMessage = 'Start: Executing Stored Procedure: ' + ISNULL(@SPROC_Name,'')
+		EXEC csamart.dbo.usp_CSAT_INSERTProcessLog 	@Level = @Level,@Logger = @Logger,@Message = @InfoLogMessage,@CompName = ''
+
+
+	IF @Debug = 1
+	BEGIN
+		SELECT @BaseSubject as BaseSubject, @BaseMessage as BaseMessage
+	END
+
+CREATE TABLE #ClientApplicationAdHocCsvReportsData ([ClientApplicationAdHocReportId] [INT] ,
+	[ClientApplicationId] [INT] NOT NULL,
+	[Command] [VARCHAR](MAX) NOT NULL,
+	[Subject] VARCHAR(1000) Not null,
+	[Message] VARCHAR(MAX) Not null,
+	[Recipients] [VARCHAR](MAX) NOT NULL,
+	[IsActive] BIT not null ,
+	[ExporttoEmail] BIT not null	,
+	[ExporttoCSV] BIT not null,
+	[Frequency] [VARCHAR](100) NULL,
+	[NoOfMinutes] [INT] NULL,
+	[NextRunDateTime] [datetime] NULL,
+	[LastRunDateTime] [datetime] NULL,
+	)
+
+INSERT INTO #ClientApplicationAdHocCsvReportsData ( ClientApplicationAdHocReportId,ClientApplicationId,Command,Subject,Message,Recipients,IsActive,ExporttoEmail,ExporttoCSV,
+frequency,NoOfMinutes,NextRunDateTime,LastRunDateTime)
+
+SELECT  
+	ClientApplicationAdHocReportId = caac.ClientApplicationAdHocReportId,
+	ClientApplicationId = caac.ClientApplicationId,
+	Command = caac.Command,
+	Subject = caac.Subject,
+	Message = caac.Message,
+	Recipients = caac.Recipients,
+	IsActive = caac.IsActive,
+	ExporttoEmail = caac.ExporttoEmail,
+	ExporttoCSV = caac.ExporttoCSV,
+	frequency = frequency,
+	NoOfMinutes  = NoOfMinutes,
+	nextrundatetime = nextrundatetime,
+	lastrundatetime = lastrundatetime
+FROM [ProviderServices].dbo.[ClientApplicationAdHocReports] caac with(nolock)
+WHERE ClientApplicationAdHocReportId = @ClientApplicationAdHocReportId
+
+SELECT @RecordCounter = @@ROWCOUNT
+
+		IF @debug = 1
+			BEGIN
+				SELECT 'Output FROM #ClientApplicationAdHocCsvReportsData table' AS TablesToArchiveData , (SELECT COUNT(*) FROM #ClientApplicationAdHocCsvReportsData) AS TotalCount
+				SELECT 'Output FROM #ClientApplicationAdHocCsvReportsData table',* FROM #ClientApplicationAdHocCsvReportsData
+			END
+
+
+Declare @ClientApplicationId INT ,@Command VARCHAR(MAX),@Subject VARCHAR(MAX),
+@Message VARCHAR(MAX),@Recipients VARCHAR(MAX),@IsActive BIT,@ExporttoEmail BIT,@ExporttoCSV BIT
+
+DECLARE @ColumnString VARCHAR(MAX),@ColumnNames VARCHAR(MAX) = '',@BaseHTML VARCHAR(MAX) = '',@ColumnInd INT,@HeaderTemplate VARCHAR(MAX),@ColumnCreateCount INT,
+@ColumnName VARCHAR(MAX),@AlterTableSQL VARCHAR(MAX),  @ColumnNameslist NVARCHAR (MAX) = '',@restOfQuery NVARCHAR (MAX) = '',@DynTSQL NVARCHAR (MAX), @FROMPOS INT,@TempTableSQLQuery VARCHAR(MAX),
+@sqlOutput2 nVARCHAR(MAX),@commandhtml VARCHAR(MAX) = '',@ColumnErrors VARCHAR(MAX) = '',@frequency VARCHAR(MAX) = null,@NoOfMinutes INT  = null ,
+@nextrundatetime datetime = null,@lastrundatetime datetime = null,@TotalRecords INT = 0, @filename VARCHAR(1000)
+
+		
+			SELECT TOP 1 
+				@ClientApplicationAdHocReportId = ClientApplicationAdHocReportId,
+				@ClientApplicationId = ClientApplicationId,
+				@Command = Command,
+				@Subject = Subject,
+				@Message = Message,
+				@Recipients = Recipients,
+				@IsActive = IsActive,
+				@ExporttoEmail = ExporttoEmail,
+				@ExporttoCSV = ExporttoCSV,
+				@frequency = frequency,
+				@NoOfMinutes  = NoOfMinutes,
+				@nextrundatetime = nextrundatetime,
+				@lastrundatetime = lastrundatetime
+			FROM #ClientApplicationAdHocCsvReportsData
+		
+
+		IF @debug = 1
+			BEGIN
+				SELECT @ClientApplicationAdHocReportId as ClientApplicationAdHocReportId,@ClientApplicationId as ClientApplicationId,@Command as Command,
+				@Subject as Subject,@Message as Message, @Recipients as Recipients,@IsActive as IsActive,@ExporttoEmail as ExporttoEmail,@ExporttoCSV as ExporttoCSV,
+				@frequency as frequency,@NoOfMinutes as NoOfMinutes,@nextrundatetime as nextrundatetime,@lastrundatetime as lastrundatetime	
+			END
+			
+		-- Clean up local variables before start
+				SELECT @ColumnNames = '',@HeaderTemplate = '<th width="150">DataResultId</th>'
+
+				IF OBJECT_ID('tempdb..#ColumnResults') IS NOT NULL DROP TABLE #ColumnResults
+				IF OBJECT_ID('tempdb..#DataResult') IS NOT NULL DROP TABLE #DataResult
+				IF OBJECT_ID('tempdb..#FinalOutput') IS NOT NULL DROP TABLE #FinalOutput	
+		
+				create table #ColumnResults ( columnname VARCHAR(100))
+				Create table #DataResult ( DataResultId INT identity (1,1))
+            
+
+				BEGIN TRY
+								
+								SELECT @BaseHTML = '<table width="100%" cellpadding="4" cellspacing="1" style="font-family: Arial; text-align: left; border: 1px solid #CCC;"><thead style="font-family: Arial; font-size: 1em; background: #E8E8E8; font-size: 0.75em;"><tr><%HeaderDetails%></tr></thead><tbody style="font-size: 0.866em;"><%DataDetails%></table><br></tbody></table><br>'
+
+								if @Command like '%--%' or @Command like '%/*%' or @Command like '%*/%'
+									Begin
+										Select @ErrorMessage = 'Query Contains Restricted Code such as -- or /* or */ , please remove the comments and update the query in the table'
+										RAISERROR (@ErrorMessage, -- Message text.
+											   16, -- Severity.
+											   1 );-- State.;
+									End
+
+
+									SELECT @ColumnNames += '' + NAME + ' ' + '' + ','
+									FROM sys.dm_exec_describe_first_result_set(@Command, NULL, 0)
+
+									SET @ColumnNames = left (@ColumnNames, Len (@ColumnNames) - 1)
+									
+									SELECT @ColumnErrors += '' + error_message + ' ' + '' + ','
+									FROM sys.dm_exec_describe_first_result_set(@Command, NULL, 0)
+									WHERE error_message is not null and error_type_desc = 'SYNTAX'
+				
+									IF @debug = 1
+									BEGIN
+										SELECT @ClientApplicationAdHocReportId as ClientApplicationAdHocReportId,@ClientApplicationId as ClientApplicationId,@Command as Command,
+												@Subject as Subject,@ColumnNames as ColumnNames,@ColumnErrors as ColumnErrors
+									END
+
+									IF @ColumnErrors is not null and @ColumnErrors <> ''
+									BEGIN
+										RAISERROR (@ColumnErrors, -- Message text.
+											   16, -- Severity.
+											   1 -- State.
+									   );
+									END
+
+									If @ColumnNames is null
+									BEGIN
+										Select @ErrorMessage = 'One or more column is missing a column name, if you have used built-in SQL functions such as Count, Convert, Cast Etc in your query then make sure to give a column name to the column Example Convert(varchar(100),getdate(),121) as TodaysDate'
+										RAISERROR (@ErrorMessage, -- Message text.
+											   16, -- Severity.
+											   1 -- State.
+									   );
+									END
+														
+
+										SET @ColumnInd = CharIndex(',',@ColumnNames)
+											WHILE @ColumnInd > 0
+												BEGIN
+													  SET @ColumnString = SUBSTRING(@ColumnNames,1,@ColumnInd-1)
+													  SET @ColumnNames = SUBSTRING(@ColumnNames,@ColumnInd+1,LEN(@ColumnNames)-@ColumnInd)
+
+													  INSERT INTO #ColumnResults values (@ColumnString)
+
+													  SET @ColumnInd = CharIndex(',',@ColumnNames)
+												END
+
+										SET @ColumnString = @ColumnNames
+
+										INSERT INTO #ColumnResults values (@ColumnString)
+										IF @debug  = 1
+										BEGIN
+											SELECT 'Output FROM #ColumnResults table',* FROM #ColumnResults
+										END 
+
+
+										SELECT @ColumnCreateCount = Count(*) FROM #ColumnResults
+
+														WHILE @ColumnCreateCOunt > 0
+														BEGIN
+															SELECT TOP 1
+																@ColumnName =  ColumnName
+															FROM #ColumnResults
+											
+															SELECT @HeaderTemplate = @HeaderTemplate + '<th width="150">' + @ColumnName + '</th>'
+															SELECT @AlterTableSQL = 'ALTER TABLE #DataResult ADD ' + @ColumnName + ' VARCHAR(MAX)'
+											
+															EXEC( @AlterTableSQL)
+															SELECT @ColumnCreateCount = @ColumnCreateCount - 1
+															delete FROM #ColumnResults WHERE columnname= @ColumnName
+															SELECT @AlterTableSQL = ''
+														END
+
+										 				  
+										  INSERT INTo #DataResult
+										  Exec(@Command)
+										 
+
+										IF @debug  = 1
+										BEGIN
+											SELECT 'Output FROM #DataResult table' AS OutputFROMDataResult , (SELECT COUNT(*) FROM #DataResult) AS TotalDataCount
+											SELECT 'Output FROM #DataResult',* FROM #DataResult
+										END 
+
+										 IF (SELECT count(*) FROM #DataResult ) > 0 
+										 BEGIN
+										  
+										 SELECT @BaseHTML = Replace(@BaseHTML,'<%HeaderDetails%>',@HeaderTemplate)
+												IF @Debug = 1
+												BEGIN
+													SELECT '-- After Setting Header Details --',@BaseHTML as BaseHTML,@HeaderTemplate as HeaderHTML
+												END
+
+												SELECT @TempTableSQLQuery = ' SELECT * FROM #DataResult' 
+
+													SELECT @ColumnNameslist += 'ISNULL (' + NAME + ',' + '''' + ' ' + '''' + ')' + ','
+													FROM sys.dm_exec_describe_first_result_set(@TempTableSQLQuery, NULL, 0)
+
+														SET @ColumnNameslist = left (@ColumnNameslist, Len (@ColumnNameslist) - 1)
+														SET @FROMPOS = CHARINDEX ('FROM', @TempTableSQLQuery, 1)
+														SET @restOfQuery = SUBSTRING(@TempTableSQLQuery, @FROMPOS, LEN(@TempTableSQLQuery) - @FROMPOS + 1)
+										
+
+														SELECT @Message = @Message + '<br/><br/>Total No Of Records : <b>' + ( SELECT Convert(VARCHAR(MAX),(SELECT COUNT(*) FROM #DataResult))) + '</b>'
+														
+														SET @ColumnNameslist = Replace (@ColumnNameslist, '),', ') as TD,')
+  
+														   SET @ColumnNameslist += ' as TD'
+     													   SET @DynTSQL =CONCAT (
+																 'SET @sqlOutput2 = (SELECT (SELECT ', @ColumnNameslist ,' ', @restOfQuery ,' FOR XML RAW (''TR''), ELEMENTS, TYPE) ',' FOR XML PATH ('''') ) SELECT @sqlOutput2' )
+																 
+														 create table #FinalOutput ( FinalHITML xml)			
+									
+														 INSERT INTo #FinalOutput
+														 exec sp_executesql @DynTSql,N'@sqlOutput2 VARCHAR(MAX)', @sqlOutput2=@sqlOutput2
+														 
+														 SELECT @BaseHTML= Replace(@BaseHTML,'<%DataDetails%>',(SELECT convert(VARCHAR(MAX),FinalHITML) FROM #FinalOutput))
+														 
+														 
+														 SELECT @FileName = @Subject
+																					
+				END
+					END TRY  
+					BEGIN CATCH
+								SELECT @ErrorMessage = 'Unable to run the Query !! System Error Message: ' + ERROR_MESSAGE() + ' ' ,
+								@ErrorSeverity = ERROR_SEVERITY(),
+								@ErrorState = ERROR_STATE();
+								
+								SELECT @BaseHTML = ''
+
+		
+				END CATCH 
+					-- the below END is for IF clause WHEN column Name is null meaning WHEN no data was returned FROM sql query
+		
+		UPDATE ProviderServices.dbo.ClientApplicationAdHocReports
+								SET LastRunDateTime = getdate(),
+									NextRunDateTime = 
+										CASE 
+											WHEN LOWER(ISNULL(Frequency, '')) = 'daily' THEN DATEADD(DY, 1, @nextrundatetime)
+											WHEN LOWER(ISNULL(Frequency, '')) = 'weekly' THEN DATEADD(WW, 1, @nextrundatetime)
+											WHEN LOWER(ISNULL(Frequency, '')) = 'monthly' THEN DATEADD(MM, 1, @nextrundatetime)
+											WHEN LOWER(ISNULL(Frequency, '')) = 'quarterly' THEN DATEADD(QQ, 1, @nextrundatetime)
+											WHEN LOWER(ISNULL(Frequency, '')) = 'minutes' THEN DATEADD(MI, NoOfMinutes, @nextrundatetime)
+											WHEN LOWER(ISNULL(Frequency, '')) = 'hourly' THEN DATEADD(MI, 60, @nextrundatetime)
+										END,
+										MdDate = getdate(),
+										MdUser = Suser_name()	
+									
+		WHERE [ClientApplicationAdHocReportId] = @ClientApplicationAdHocReportId
+
+		SELECT @nextrundatetime = NextRunDatetime FROM ProviderServices.dbo.ClientApplicationAdHocReports WHERE [ClientApplicationAdHocReportId] = @ClientApplicationAdHocReportId
+
+		SELECT @Message = @Message + '<br/>ClientApplicationAdHocReportId : <b>' + ( SELECT Convert(VARCHAR(MAX),@ClientApplicationAdHocReportId)) + '</b>'
+		SELECT @Message = @Message + '<br/>Frequency : <b>' + CASE WHEN @NoOfMinutes is not null then ISNULL(Convert(VARCHAR(100),@NoOfMinutes),' ') + ' ' ELSE '' END + @frequency + ' ' +  '</b>'
+		SELECT @Message = @Message + '<br/>Next Run Datetime : <b>' + convert(VARCHAR(10),@nextrundatetime, 101) + right(convert(VARCHAR(32),@nextrundatetime,100),8) + '</b>'
+		SELECT @Message = @Message + '<br/>Query : <b>' + '<br/><div id="rectangle" style="width:number px; height:number px;">' + @command + '</div>' + '</b>'
+
+		SELECT @LogMessage = @LogMessage + 'ClientApplicationAdHocReportId : ' + ( SELECT Convert(VARCHAR(MAX),@ClientApplicationAdHocReportId)) + ', '
+		SELECT @LogMessage = @LogMessage + 'Frequency : ' + CASE WHEN @NoOfMinutes is not null then ISNULL(Convert(VARCHAR(100),@NoOfMinutes),' ') + ' ' ELSE '' END + @frequency + ', '
+		SELECT @LogMessage = @LogMessage + 'Subject : ' + @Subject + ', '
+		SELECT @LogMessage = @LogMessage + 'Next Run Datetime : ' + convert(VARCHAR(10),@nextrundatetime, 101) + right(convert(VARCHAR(32),@nextrundatetime,100),8) + ', '
+		SELECT @LogMessage = @LogMessage + 'Query : ' + @command   
+
+		IF @ErrorMessage is not null
+		BEGIN
+			SELECT @Message = @Message + '<br/><br/><span style="color:red">' + @ErrorMessage + '</span>'
+			SELECT @LogMessage = @LogMessage + ', Error Message : ' + @ErrorMessage + ' '
+			SELECT @Level = 'Error'
+		END
+
+		 SELECT @Subject = Replace(@BaseSubject,'<%CustomizedSubject%>',@Subject)
+		 SELECT @BaseHTML = @BaseMessage + '<br/>'  + ISNULL(@Message,'') + '<br/>' 
+		-- This is END of IF Loop - WHERE we check nextrundatetime is less than current datetime
+		--END
+
+			IF @debug = 1
+				BEGIN
+						SELECT @BaseSubject as BaseSubject, @Subject as Subject, @BaseHTML as BaseHTML, @Message as Message, @CommandHtml as CommandHTML, @ErrorMessage as ErrorMessage
+				END 
+
+			EXEC csamart.dbo.usp_CSAT_INSERTProcessLog 	@Level = @Level,@Logger = @Logger,@Message = @LogMessage,@CompName = ''
+
+
+			IF @debug = 1
+			BEGIN
+				SELECT @ClientApplicationAdHocReportId as ClientApplicationAdHocReportId,@ClientApplicationId as ClientApplicationId,@Command as Command,
+				@Subject as Subject,@Message as Message, @Recipients as Recipients,
+				@IsActive as IsActive,@ExporttoEmail as ExporttoEmail,@ExporttoCSV as ExporttoCSV	
+
+				SELECT @BaseHTML as BaseHTML,@HeaderTemplate as HeaderTemplate,
+				@ColumnNameslist as ColumnNameslist,@restOfQuery as restOfQuery,
+				@DynTSQL as DynamicSQLToConvertSQLToHTML
+			END
+
+	
+
+	SELECT @Subject as Subject, @BaseHTML as Message, @Recipients Recipients , @ErrorMessage as ErrorMessage,Replace(@filename + '_'+  REPLACE(    REPLACE(       CONVERT(VARCHAR(20), GETDATE(), 120)       , ':', '')    , '-', ''),' ','') as FileName
+	SELECT * FROM #DataResult
+
+	IF OBJECT_ID('tempdb..#ClientApplicationAdHocCsvReportsData') IS NOT NULL DROP TABLE #ClientApplicationAdHocCsvReportsData
+	IF OBJECT_ID('tempdb..#ColumnResults') IS NOT NULL DROP TABLE #ColumnResults
+	IF OBJECT_ID('tempdb..#DataResult') IS NOT NULL DROP TABLE #DataResult
+	IF OBJECT_ID('tempdb..#FinalOutput') IS NOT NULL DROP TABLE #FinalOutput	
+END TRY
+BEGIN CATCH
+
+	--EXEC usp_csat_dw_log @SPROC_Name, @InfoLogMessage
+	IF OBJECT_ID('tempdb..#ClientApplicationAdHocCsvReportsData') IS NOT NULL DROP TABLE #ClientApplicationAdHocCsvReportsData
+	IF OBJECT_ID('tempdb..#ColumnResults') IS NOT NULL DROP TABLE #ColumnResults
+	IF OBJECT_ID('tempdb..#DataResult') IS NOT NULL DROP TABLE #DataResult
+	IF OBJECT_ID('tempdb..#FinalOutput') IS NOT NULL DROP TABLE #FinalOutput	
+
+	SELECT 
+		@ErrorMessage = ERROR_MESSAGE(),
+		@ErrorSeverity = ERROR_SEVERITY(),
+		@ErrorState = ERROR_STATE();
+
+		SELECT @LogMessage = @LogMessage + ', Error Message : ' + @ErrorMessage + ' '
+		SELECT @Level = 'Error'
+		
+		EXEC csamart.dbo.usp_CSAT_INSERTProcessLog 	@Level = @Level,@Logger = @Logger,@Message = @LogMessage,@CompName = ''
+
+
+	-- Use RAISERROR inside the CATCH block to return error
+	-- information about the original error that caused
+	-- execution to jump to the CATCH block.
+	RAISERROR (@ErrorMessage, -- Message text.
+		   @ErrorSeverity, -- Severity.
+		   @ErrorState -- State.
+		   );
+		   
+END CATCH
+
+SELECT @InfoLogMessage = 'Finish: Executing Stored Procedure: ' + ISNULL(@SPROC_Name,'')
+EXEC csamart.dbo.usp_CSAT_INSERTProcessLog 	@Level = @Level,@Logger = @Logger,@Message = @InfoLogMessage,@CompName = ''
+
+SET NOCOUNT OFF
