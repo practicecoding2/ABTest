@@ -1,0 +1,249 @@
+CREATE PROCEDURE [dbo].[GetClientApplicationAdHocReportsCsv] 
+
+--====================================================================================--
+--====================================================================================--
+-- Description:	SP runs the sql query stored in table and generates dataset for CSV
+-- Usage:		EXEC ProviderServices.dbo.GetClientApplicationAdHocReportsCsv @Debug = 0, @ReportId = 1
+-- Author:		Michael Maniatis 12/12/2019
+-- Revision History:
+-- 	Date		Programmer		Description
+--====================================================================================--
+--====================================================================================--
+(
+
+	@Debug BIT = 0,
+	@ReportId int = 1
+)
+
+AS
+
+SET NOCOUNT ON
+SET FMTONLY OFF
+
+IF OBJECT_ID('tempdb..#ClientApplicationAdHocReports') IS NOT NULL DROP TABLE #ClientApplicationAdHocReports
+IF OBJECT_ID('tempdb..#ColumnResults') IS NOT NULL DROP TABLE #ColumnResults
+IF OBJECT_ID('tempdb..#DataResult') IS NOT NULL DROP TABLE #DataResult
+IF OBJECT_ID('tempdb..#FinalOutput') IS NOT NULL DROP TABLE #FinalOutput	
+
+--Declare @debug int = 1
+
+
+DECLARE @RecordCounter INT, @err INT, @InfoLogMessage VARCHAR(200), @SPROC_Name VARCHAR(100)
+SELECT @RecordCounter = 0, @err = 0, @InfoLogMessage = '', @SPROC_Name = ISNULL(OBJECT_NAME(@@PROCID) ,'')
+DECLARE @TableName VARCHAR(150), @ErrorMessage NVARCHAR(4000), @ErrorSeverity INT, @ErrorState INT,@ServerName varchar(100),@Environment varchar(100)
+
+SET @ServerName = @@SERVERNAME	
+      IF left(@servername,1) = 'D' BEGIN SELECT 	@Environment  = '[DEV]' END
+      IF left(@servername,1) = 'Q' BEGIN SELECT 	@Environment  = '[QAS]' END
+	  IF left(@servername,1) = 'U' BEGIN SELECT 	@Environment  = '[UAT]' END
+	  IF left(@servername,1) = 'G' BEGIN SELECT 	@Environment  = '[STG]' END
+	  IF left(@servername,1) = 'R' BEGIN SELECT 	@Environment  = '[DR]' END
+	  IF left(@servername,1) = 'S' BEGIN SELECT 	@Environment  = '[SUPPORT]' END
+	  IF left(@servername,1) = 'T' BEGIN SELECT 	@Environment  = '[TRAINING]' END
+	  IF left(@servername,1) = 'P' BEGIN SELECT 	@Environment  = '[PROD]' END
+		
+BEGIN TRY 
+
+SELECT @InfoLogMessage = 'Start: Executing Stored Procedure: ' + @SPROC_Name
+		EXEC csamart.dbo.usp_CSAT_InsertProcessLog 	@Level = 'Info',@Logger = 'Client Application Ad Hoc CSV creation',@Message = @InfoLogMessage,@CompName = ''
+
+
+CREATE TABLE #ClientApplicationAdHocReports ([ClientApplicationAdHocReportId] [int] ,
+	[ClientApplicationId] [int] NOT NULL,
+	[Command] [varchar](max) NOT NULL,
+	[Subject] varchar(1000) Not null,
+	[Message] varchar(max) Not null,
+	[Recipients] [varchar](max) NOT NULL,
+	[IsActive] bit not null ,
+	[ExporttoEmail] bit not null	,
+	[ExporttoCSV] bit not null	)
+
+INSERT INTO #ClientApplicationAdHocReports ( ClientApplicationAdHocReportId,ClientApplicationId,Command,Subject,Message,Recipients,IsActive,ExporttoEmail,ExporttoCSV )
+
+Select  
+	ClientApplicationAdHocReportId = caac.ClientApplicationAdHocReportId,
+	ClientApplicationId = caac.ClientApplicationId,
+	Command = caac.Command,
+	Subject = caac.Subject,
+	Message = caac.Message,
+	Recipients = caac.Recipients,
+	IsActive = caac.IsActive,
+	ExporttoEmail = caac.ExporttoEmail,
+	ExporttoCSV = caac.ExporttoCSV
+from [ProviderServices].dbo.[ClientApplicationAdHocReports] caac with(nolock)
+where ClientApplicationAdHocReportId = @ReportId
+
+IF @Debug = 1
+BEGIN
+	SELECT 'ALL REPORTS FROM #ClientApplicationAdHocReports: '
+	select * from #ClientApplicationAdHocReports
+END
+SELECT @RecordCounter = @@ROWCOUNT
+
+Declare @ClientApplicationAdHocReportId int ,@ClientApplicationId int ,@Command varchar(max),@Subject varchar(max),
+@Message varchar(max),@Recipients varchar(max),@IsActive bit,@ExporttoEmail bit,@ExporttoCSV bit
+
+DECLARE @ColumnString VARCHAR(max),@ColumnNames varchar(max) = '',@BaseHTML varchar(max),@ColumnInd Int,@HeaderTemplate varchar(max),@ColumnCreateCount int,
+@ColumnName varchar(max),@AlterTableSQL varchar(max),  @ColumnNameslist NVARCHAR (max) = '',@restOfQuery NVARCHAR (max) = '',@DynTSQL NVARCHAR (max), @FROMPOS INT,@TempTableSQLQuery varchar(max),
+@sqlOutput2 nvarchar(max)
+
+Select  
+	@ClientApplicationAdHocReportId = ClientApplicationAdHocReportId,
+	@ClientApplicationId = ClientApplicationId,
+	@Command = Command,
+	@Subject = Subject,
+	@Message = Message,
+	@Recipients = Recipients,
+	@IsActive = IsActive,
+	@ExporttoEmail = ExporttoEmail,
+	@ExporttoCSV = ExporttoCSV	
+from #ClientApplicationAdHocReports
+		
+
+		
+
+-- Clean up local variables before start
+
+IF OBJECT_ID('tempdb..#ColumnResults') IS NOT NULL DROP TABLE #ColumnResults
+IF OBJECT_ID('tempdb..#DataResult') IS NOT NULL DROP TABLE #DataResult
+IF OBJECT_ID('tempdb..#FinalOutput') IS NOT NULL DROP TABLE #FinalOutput	
+
+SELECT @ColumnNames += '' + NAME + ' ' + '' + ','
+FROM sys.dm_exec_describe_first_result_set(@Command, NULL, 0)
+				
+SET @ColumnNames = left (@ColumnNames, Len (@ColumnNames) - 1)
+		
+create table #ColumnResults ( columnname varchar(100))
+Create table #DataResult ( Id Int identity (1,1))
+
+
+
+
+
+	              IF(@ColumnNames is not null)
+				   BEGIN
+						
+							BEGIN TRY
+										
+
+							SET @ColumnInd = CharIndex(',',@ColumnNames)
+								WHILE @ColumnInd > 0
+									BEGIN
+											SET @ColumnString = SUBSTRING(@ColumnNames,1,@ColumnInd-1)
+											SET @ColumnNames = SUBSTRING(@ColumnNames,@ColumnInd+1,LEN(@ColumnNames)-@ColumnInd)
+
+											INSERT INTO #ColumnResults values (@ColumnString)
+
+											SET @ColumnInd = CharIndex(',',@ColumnNames)
+									END
+
+									--SELECT @ColumnNames
+									--SELECT * From #ColumnResults
+
+										SET @ColumnString = @ColumnNames
+
+										INSERT INTO #ColumnResults values (@ColumnString)
+
+										Select @ColumnCreateCount = Count(*) from #ColumnResults
+
+														While @ColumnCreateCount > 0
+														BEGIN
+															Select top 1
+																@ColumnName =  ColumnName
+															from #ColumnResults
+															Select @AlterTableSQL = 'ALTER TABLE #DataResult ADD ' + @ColumnName + ' VARCHAR(MAX)'
+											
+															EXEC( @AlterTableSQL)
+															Select @ColumnCreateCount = @ColumnCreateCount - 1
+															delete from #ColumnResults where columnname= @ColumnName
+															Select @AlterTableSQL = ''
+														END
+
+										  Insert into #DataResult
+										  Exec(@Command)
+
+
+										  Select * from #DataResult
+
+					END TRY  
+					BEGIN CATCH
+							 
+									
+									IF OBJECT_ID('tempdb..#ColumnResults') IS NOT NULL DROP TABLE #ColumnResults
+									IF OBJECT_ID('tempdb..#DataResult') IS NOT NULL DROP TABLE #DataResult
+									IF OBJECT_ID('tempdb..#FinalOutput') IS NOT NULL DROP TABLE #FinalOutput	
+
+
+								SELECT @ErrorMessage = 'Unable to run the report !! System Error Message: ' + ERROR_MESSAGE() + ' ' + @Command ,
+								@ErrorSeverity = ERROR_SEVERITY(),
+								@ErrorState = ERROR_STATE();
+
+								EXEC csamart.dbo.usp_CSAT_InsertProcessLog 	@Level = 'Error',@Logger = 'Client Application Ad Hoc CSV Reporting',@Message = @ErrorMessage,@CompName = ''
+								
+							-- Use RAISERROR inside the CATCH block to return error
+							-- information about the original error that caused
+							-- execution to jump to the CATCH block.
+							RAISERROR (@ErrorMessage, -- Message text.
+								   @ErrorSeverity, -- Severity.
+								   @ErrorState -- State.
+								   );
+						END CATCH 
+					---- the below End is for if clause when column Name is null meaning when no data was returned from sql query
+				  END
+
+		delete from #ClientApplicationAdHocReports where ClientApplicationAdHocReportId = @ClientApplicationAdHocReportId
+		SELECT @RecordCounter = @RecordCounter - 1
+
+			IF @debug = 1
+			BEGIN
+				Select @ClientApplicationAdHocReportId as ClientApplicationAdHocReportId,@ClientApplicationId as ClientApplicationId,@Command as Command,
+				@Subject as Subject,@Message as Message, @Recipients as Recipients,
+				@IsActive as IsActive,@ExporttoEmail as ExporttoEmail,@ExporttoCSV as ExporttoCSV	
+
+				Select @BaseHTML as BaseHTML,@HeaderTemplate as HeaderTemplate,
+				@ColumnNameslist as ColumnNameslist,@restOfQuery as restOfQuery,
+				@DynTSQL as DynamicSQLToConvertSQLToHTML
+			END
+
+		Select @ClientApplicationAdHocReportId = '',@ClientApplicationId = '',@Command =  '',@Subject =  '',@Message =  '',	@Recipients =  '',
+				@IsActive =  '',@ExporttoEmail =  '',@ExporttoCSV =  ''	
+				
+		Select @BaseHTML = '',@HeaderTemplate = '',@ColumnNameslist ='',@restOfQuery ='',@sqlOutput2 = ''
+	
+
+	IF OBJECT_ID('tempdb..#ClientApplicationAdHocReports') IS NOT NULL DROP TABLE #ClientApplicationAdHocReports
+	IF OBJECT_ID('tempdb..#ColumnResults') IS NOT NULL DROP TABLE #ColumnResults
+	IF OBJECT_ID('tempdb..#DataResult') IS NOT NULL DROP TABLE #DataResult
+	IF OBJECT_ID('tempdb..#FinalOutput') IS NOT NULL DROP TABLE #FinalOutput	
+END TRY
+BEGIN CATCH
+
+	--EXEC usp_csat_dw_log @SPROC_Name, @InfoLogMessage
+	IF OBJECT_ID('tempdb..#ClientApplicationAdHocReports') IS NOT NULL DROP TABLE #ClientApplicationAdHocReports
+	IF OBJECT_ID('tempdb..#ColumnResults') IS NOT NULL DROP TABLE #ColumnResults
+	IF OBJECT_ID('tempdb..#DataResult') IS NOT NULL DROP TABLE #DataResult
+	IF OBJECT_ID('tempdb..#FinalOutput') IS NOT NULL DROP TABLE #FinalOutput	
+
+	SELECT 
+		@ErrorMessage = ERROR_MESSAGE(),
+		@ErrorSeverity = ERROR_SEVERITY(),
+		@ErrorState = ERROR_STATE();
+
+		
+        EXEC csamart.dbo.usp_CSAT_InsertProcessLog 	@Level = 'Error',@Logger = 'Client Application Ad Hoc Reporting',@Message = @ErrorMessage,@CompName = ''
+
+
+	-- Use RAISERROR inside the CATCH block to return error
+	-- information about the original error that caused
+	-- execution to jump to the CATCH block.
+	RAISERROR (@ErrorMessage, -- Message text.
+		   @ErrorSeverity, -- Severity.
+		   @ErrorState -- State.
+		   );
+		   
+END CATCH
+
+SELECT @InfoLogMessage = 'Finish: Executing Stored Procedure: ' + @SPROC_Name
+EXEC csamart.dbo.usp_CSAT_InsertProcessLog 	@Level = 'Info',@Logger = 'Client Application Ad Hoc Reporting',@Message = @InfoLogMessage,@CompName = ''
+
+SET NOCOUNT OFF
