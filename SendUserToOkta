@@ -1,0 +1,214 @@
+ [HttpGet]
+ [Route("UserOktaMigration")]
+ public async Task<Boolean> UserOktaMigration()
+ {
+     string oktaobjectid = string.Empty;
+     var _oktaApiKey = "";
+     var sendActivationEmailToggle = false;
+     var oktaUserMigrationToggle = false;
+     bool userNameHasValidEmailId = false;
+     string hostName = String.Empty;
+     var correlationId = Guid.NewGuid().ToString();
+     var url = string.Empty;
+     int count = 0;
+     var watch = System.Diagnostics.Stopwatch.StartNew();
+     url = _iconfiguration["Okta:CreateOktaUserUrl"];
+
+
+
+     //Add transaction process log
+     var log = new TransactionProcessLog();
+     {
+         log.CorrelationId = correlationId;
+         log.ClassName = nameof(DataController);
+         log.MethodName = nameof(UserOktaMigration) + ".cs";
+         log.StepNo = 1;
+         log.StepName = "UserOktaMigration";
+         log.Sender = "LoanPayOffAPI";
+         log.Receiver = "Okta";
+         log.ProcessName = "LPAPI-" + nameof(UserOktaMigration);
+         log.MethodName = "api/Admin/Data/UserOktaMigration";
+         log.ComputerName = Dns.GetHostName();
+         log.RequestJson = "UserOktaMigration Process Started";
+         log.Endpoint = url;
+     };
+     try
+     {
+         var appParameter = await commonService.GetAppParameters("OktaUserMigration", "");
+         await commonService.SetFunctionDateTimeRange("MonitorUserOktaMigration", "U", "S");
+         if (appParameter != null && appParameter.Count > 0)
+         {
+             oktaUserMigrationToggle = appParameter.Where(a => a.ParamterName == "CreateUsersInOkta").Select(m => m.ParamterValue).FirstOrDefault() == "1";
+             sendActivationEmailToggle = appParameter.Where(a => a.ParamterName == "SendActivationEmail").Select(m => m.ParamterValue).FirstOrDefault() == "1";
+             _oktaApiKey = appParameter.Where(a => a.ParamterName == "OktaApiKey").Select(m => m.ParamterValue).FirstOrDefault();
+             log.Token = _oktaApiKey;
+         }
+         List<PersonDetails> personDetailsList = commonService.UserOktaMigration();
+         if (oktaUserMigrationToggle && personDetailsList != null && personDetailsList.Count > 0)
+         {
+             count = personDetailsList.Count;
+             foreach (PersonDetails personDetail in personDetailsList)
+             {
+                 try
+                 {
+                     log.IsSuccess = true;
+                     log.StackTrace=log.InnerExceptionMessage=log.ExceptionMessage=log.RequestJson = null;
+                     log.ErrorMessage = log.RequestXml = log.ResponseXml=log.ValidationMessage = null;
+                     var oktaDetails = new OktaUserDetails();
+                     url = _iconfiguration["Okta:CreateOktaUserUrl"];
+
+                     if (!string.IsNullOrEmpty(personDetail.password) && !string.IsNullOrEmpty(personDetail.salt))
+                     {
+                         byte[] hex2byteArray = Enumerable.Range(0, personDetail.password.Length)
+                         .Where(x => x % 2 == 0)
+                         .Select(x => Convert.ToByte(personDetail.password.Substring(x, 2), 16))
+                         .ToArray();
+
+                         //string passwordBase64 = Convert.ToBase64String(hex2byteArray);
+                         Hash oktaHash = new Hash
+                         {
+                             algorithm = "SHA-256",
+                             saltOrder = "POSTFIX",
+                             salt = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(personDetail.salt)),
+                             value = Convert.ToBase64String(hex2byteArray)
+                         };
+                         oktaDetails.credentials = new Credentials { password = new Password { hash = oktaHash } };
+                         url = url + "?activate=true";
+                     }
+                     else
+                     {
+                         url = url + "?activate=" + (sendActivationEmailToggle ? "true" : "false");
+                     }
+
+                     //Check if username is in email format
+                     try
+                     {
+                         var addr = new System.Net.Mail.MailAddress(personDetail.username);
+                         if (addr.Address == personDetail.username)
+                         {
+                             userNameHasValidEmailId = true;
+                         }
+                     }
+                     catch
+                     {
+                         //If username is not in valid email format. get the domain name from email field and append it to username
+                         var emailAddress = new System.Net.Mail.MailAddress(personDetail.email);
+                         hostName = emailAddress.Host;
+                         userNameHasValidEmailId = false;
+                     }
+
+                     var profile = new Profile
+                     {
+                         firstName = personDetail.given_name,
+                         lastName = personDetail.surname,
+                         email = personDetail.email,
+                         login = userNameHasValidEmailId ? personDetail.username : personDetail.username.Replace(" ", "") + "@" + hostName,
+                         LpUserNameOktaVariable = personDetail?.username
+
+                     };
+                     oktaDetails.profile = profile;
+                     oktaDetails.groupIds = new List<string>();
+                     oktaDetails.groupIds.Add(_iconfiguration["Okta:OktaGroupId"]);
+
+
+                     var json = JsonConvert.SerializeObject(oktaDetails);
+                     log.RequestJson = json;
+                     var data = new StringContent(json, Encoding.UTF8, "application/json");
+                     //send the json to okta
+                     using (var client = new HttpClient())
+                     {
+                         client.DefaultRequestHeaders.Add("Authorization", $"SSWS {_oktaApiKey}");
+
+                         var response = await client.PostAsync(url, data);
+                         var oktapersonResponse = JsonConvert.DeserializeObject<OktaPersonDetailResponse>(response.Content.ReadAsStringAsync().Result)!;
+                         log.ResponseJson = JsonConvert.SerializeObject(oktapersonResponse);
+                         commonService.LogInfo(new ProcessLog
+                         {
+                             Level = "Info",
+                             Logger = "Loan Payoff API- OKTA SSO",
+                             Message = "CorrelationId:" + correlationId + ": UserName:" + personDetail.username + ": Okta Response :" + response.Content.ReadAsStringAsync().Result,
+                             ComputerName = Dns.GetHostName()
+
+                         });
+                         //throw new Exception();
+
+                         oktaobjectid = oktapersonResponse.id;
+                         if (!String.IsNullOrEmpty(oktapersonResponse.id))
+                         {
+                             commonService.UpdatePersonOktaMigration(oktaobjectid, personDetail.person_id);
+                         }
+
+                         //Add transaction process log                                
+                         log.UserId = personDetail?.username;
+                         if (oktapersonResponse?.errorSummary != null)
+                         {
+                             log.IsSuccess = false;
+                             log.ErrorMessage = oktapersonResponse?.errorSummary;
+                             if (oktapersonResponse.errorCauses != null && (oktapersonResponse.errorCauses.Any()))
+                             {
+                                 log.ValidationMessage = oktapersonResponse?.errorCauses[0].errorSummary;
+                             }
+                         }
+
+
+                     }
+                 }
+                 catch (Exception exception)
+                 {
+                     log.ExceptionMessage = "CorrelationId:" + correlationId + ": Message:" + exception.Message;
+                     log.InnerExceptionMessage = exception.InnerException?.Message;
+                     log.StackTrace = exception.StackTrace;
+                     log.IsSuccess = false;
+                     log.ErrorMessage = $"Message: {exception.Message} + - Inner Exception: {exception.InnerException?.Message}";
+                     commonService.CreateLogSSO(new ProcessErrorLog
+                     {
+                         ExceptionMessage = log.ExceptionMessage,
+                         InnerExceptionMessage = log.StackTrace,
+                         StackTrace = log.StackTrace,
+                         MethodName = log.MethodName,
+                         ComputerName = log.ComputerName
+                     });
+                     //_appInsightHelper.InsertAppInsightLogSSOException(exception, log);
+                     //_ = _logHelper.InsertIntoTransactionProcessLog(log);
+                 }
+                 _ = _logHelper.InsertIntoTransactionProcessLog(log);
+                 _appInsightHelper.InsertAppInsightLogSSO(log);
+             }
+         }
+         log.IsSuccess = true;
+         await commonService.SetFunctionDateTimeRange("MonitorUserOktaMigration", "U", "E");
+         return true;
+     }
+     catch (Exception exception)
+     {
+         log.ExceptionMessage = "CorrelationId:" + correlationId + ": Message:" + exception.Message;
+         log.InnerExceptionMessage = exception.InnerException?.Message;
+         log.StackTrace = exception?.StackTrace;
+         log.IsSuccess = false;
+         log.ErrorMessage = $"Message: {exception.Message} + - Inner Exception: {exception.InnerException?.Message}";
+         log.IsSuccess = false;
+         log.StackTrace = exception?.StackTrace;
+
+         commonService.CreateLogSSO(new ProcessErrorLog
+         {
+             ExceptionMessage = log.ExceptionMessage,
+             InnerExceptionMessage = log.StackTrace,
+             StackTrace = log.StackTrace,
+             MethodName = log.MethodName,
+             ComputerName = log.ComputerName
+         });
+         _ = _logHelper.InsertIntoTransactionProcessLog(log);
+         _appInsightHelper.InsertAppInsightLogSSOException(exception, log);
+         return false;
+     }
+
+     finally
+     {
+         var elapsedMs = watch.ElapsedMilliseconds;
+         log.ValidationMessage = string.Empty;
+         log.ErrorMessage = string.Empty;
+         log.RequestJson = string.Empty;
+         watch.Stop();
+         _appInsightHelper.InsertAppInsightLogSSO(log);
+     }
+ }
