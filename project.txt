@@ -1,0 +1,82 @@
+Thank you so much for your kind words! I've really enjoyed our conversations and friendship as well. Definitely, I'll miss this group. And yes I hope we can stay in touch in Insta, whatsapp..., and I wish you all the best in your future endeavors!
+
+I am grateful for the collaborative spirit that has been the heartbeat of our team. The mutual support, and shared laughter have made our workplace feel like a second home.  It's been an honor and a privilege to work with such an exceptional team.  I'll carry the lessons learned and memories shared into my future endeavors. 
+
+ I find myself reflecting on the incredible experiences we've shared as a team.
+
+
+shy
+
+listen
+okta
+sso
+knockout
+
+react
+provider services
+
+there are the one actualy business from providers like geico
+ACE
+Enterprise 
+insurance companies
+those will be procured coretrack
+
+we get the docuentation in my applicaiton
+
+we send information thru docuign
+
+we will send information thru loan payoff where we interact with lien holders
+
+
+
+
+there is too predict the minbid
+we are setting the predictive price 
+
+
+we directly talk with product
+
+ms unit framework
+test driven  and moq
+buyer platoform comes in picture 
+
+
+Own a thing 
+owner ship on a product and 
+confidence
+
+azure
+
+
+azure functions
+
+app service plan
+resource sql
+arm templates
+which plan we can decide in the arm template
+infrasturcure
+p
+
+askquestions and 
+
+
+
+
+Few suggestions to resolve job stuck issue:
+1.	Above select statement runs every hourly and it normally getting picked at 15th minute of the hour. Considering this point, check is it possible to avoid 2 to 3 hours runtime for this job (If yes, exclude Sunday schedule starting 5 PM to 7:30 PM)
+2.	Also I see the way you are deleting the date is not efficient for huge tables. 
+a.	Example, for TransactionProcessLog table You are using below delete statement based on CdDate with top 2k.
+i.	delete top (2000) tpl FROM ProviderServices.CoreTrack.TransactionProcessLog tpl where CdDate < 'Jul 31 2023 5:14PM'
+b.	It looks you are using getdate() for comparison, it not a best practice. You should declare a variable to pull one constant date and time into variable and then use that variable to delete the rows.
+c.	However, still it will try to read more records as the condition is based on date time.
+d.	Better option is, 
+i.	as this table has identity column, pull all the identity column values to a temp table one time based on CdDate column and use that temp table to delete the data. 
+OR
+ii.	 Pull Min and Max identity column values based on CdDate column, then run the delete loop based on min identity column value+2k until it reaches max, this way it will just read the specific 2k rows for deletion. 
+e.	These methods should improve the performance too. 
+f.	Wherever identity column is present, you can implement these methods for quicker removal of data. 
+
+And other points to be considered are:
+1.	Keeping only 7 days data in TransactionProcessLog table and move every day > 7 days data to Archive table. 
+2.	Purge weekly from Archive table
+3.	Also stop using SQL tables to store any data required to troubleshoot issues, start using App insights/cloud storage/log analytics workspaces for this kind of data. That will relive lot of pressure on transactional SQL server boxes.

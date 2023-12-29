@@ -1,0 +1,465 @@
+using IAAI.Instrumentation.AppInsights;
+using IAAI.Instrumentation.Base;
+using IAAI.Scheduler.ServiceBusMessaging;
+using LoanPayoff.Middleware;
+using LoanPayoff.Models;
+using LoanPayoff.Service;
+using LoanPayoff.Service.Interfaces;
+using LoanPayoff.Web.Configuration;
+using LoanPayoff.Web.Utilities;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.Razor;
+using Microsoft.Azure.Services.AppAuthentication;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Primitives;
+using Microsoft.IdentityModel.Protocols.OpenIdConnect;
+using System;
+using System.IdentityModel.Tokens.Jwt;
+using System.Net;
+using System.Security.Claims;
+using System.Threading.Tasks;
+
+namespace LoanPayoff
+{
+    public class Startup
+    {
+        private readonly string _connectionString = Constants.SqlConnString;
+        public IConfiguration Configuration { get; }
+        public IRepository repo { get; }
+
+        public Startup(IConfiguration _configuration, IHostingEnvironment env)
+        {
+            try
+            {
+                Configuration = _configuration;
+            }
+            catch (Exception ex)
+            {
+                LogError(new ProcessErrorLog
+                {
+                    ExceptionMessage = ex.Message,
+                    InnerExceptionMessage = (ex.InnerException?.Message),
+                    StackTrace = ex.StackTrace,
+                    MethodName = "Startup.Configure",
+                    ComputerName = Dns.GetHostName()
+                });
+            }
+        }
+
+        // This method gets called by the runtime. Use this method to add services to the container.
+        public void ConfigureServices(IServiceCollection services)
+        {
+            try
+            {
+                services.Configure<ApplicationConfigurations>(Configuration.GetSection("ApplicationConfigurations"));
+                services.AddMvc(o => o.EnableEndpointRouting = false).AddCookieTempDataProvider();
+                services.AddRazorPages().AddNewtonsoftJson();
+
+                services.AddApplicationInsightsTelemetry(Configuration.GetSection("ApplicationInsights").Get<AppSettings>().InstrumentationKey);
+                services.AddSingleton<IInstrumentationClient, AppInsightsInstrumentationClient>();
+
+                JwtSecurityTokenHandler.DefaultInboundClaimTypeMap.Clear();
+
+                services.Configure<ForwardedHeadersOptions>(options =>
+                {
+                    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+                });
+                services.AddSingleton<IHttpContextAccessor, HttpContextAccessor>();
+                services.AddOptions();
+
+                services.Configure<RazorViewEngineOptions>(options =>
+                {
+                    options.AreaViewLocationFormats.Clear();
+                    options.AreaViewLocationFormats.Add("/Areas/{2}/Views/{1}/{0}.cshtml");
+                    options.AreaViewLocationFormats.Add("/Areas/{2}/Views/Shared/{0}.cshtml");
+                    options.AreaViewLocationFormats.Add("/Views/Shared/{0}.cshtml");
+                });
+
+                services.Configure<ForwardedHeadersOptions>(options =>
+                {
+                    options.ForwardedHeaders =
+                        ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+                });
+
+                services.Configure<CookieTempDataProviderOptions>(options => options.Cookie.SameSite = SameSiteMode.Lax);
+
+                services.AddSingleton(Configuration);
+                services.Configure<Analytics>(Configuration.GetSection("GoogleAnalytics"));
+
+                services.AddSingleton<IRepository, Repository>();
+                services.AddSingleton<IRepositoryLender, RepositoryLender>();
+                services.AddSingleton<IRepositoryCarrier, RepositoryCarrier>();
+                services.AddSingleton<IRepositoryDealer , RepositoryDealer>();
+                services.AddSingleton<IEBIZHelperClone, EBIZHelperClone>();
+                services.AddSingleton<RecordHelper>();
+                services.Register(o => 
+                    o.FullyQualifiedNamespace = Configuration.GetValue<string>("EBIZ:ServiceBus:FullyQualifiedNamespace")
+                );
+
+                services.AddAuthentication(options =>
+                {
+
+                    options.DefaultChallengeScheme = OpenIdConnectDefaults.AuthenticationScheme;
+                    options.DefaultSignInScheme = CookieAuthenticationDefaults.AuthenticationScheme;
+                    options.DefaultAuthenticateScheme = OpenIdConnectDefaults.AuthenticationScheme;
+                })
+                .AddCookie(options =>
+                {
+                    options.LoginPath = new PathString("/Login/SsoSignIn");
+                })
+
+                //Okta SSO
+                .AddOpenIdConnect(OpenIdConnectDefaults.AuthenticationScheme, options =>
+                {
+                    var correlationId = string.Empty;
+                    var jwtHandler = new JwtSecurityTokenHandler
+                    {
+                        // MapInboundClaims = false
+                    };
+
+                    options.SignInScheme = CookieAuthenticationDefaults.AuthenticationScheme;
+                    options.Authority = Configuration.GetValue<string>("OktaSso:OktaAdminUrl") + Configuration.GetValue<string>("OktaSso:AuthServerName");
+                    //options.Authority = "https://iaaconnect.oktapreview.com/oauth2/default";
+                    options.ClientId = Configuration.GetValue<string>("OktaSso:ClientId");         // "0oao60h9p2Hp3SzQl0h7";
+                    options.ClientSecret = Configuration.GetValue<string>("OktaSso:ClientSecret"); // "7WrCR1w1M3DMmz2WcEkKLr-4N8EbHS-LnHnZ95Si";
+                    options.CallbackPath = new PathString("/signin-oidc");
+                    //options.SignInScheme = CookieAuthenticationDefaults.AuthenticationScheme;
+                    //options.Authority = Configuration.GetValue<string>("OktaSso:OktaAdminUrl") + Configuration.GetValue<string>("OktaSso:AuthServerName");    // "https://iaaconnect.oktapreview.com/oauth2/default";
+                    //options.ClientId = Configuration.GetValue<string>("OktaSso:ClientId");         // "0oao60h9p2Hp3SzQl0h7";
+                    //options.ClientSecret = Configuration.GetValue<string>("OktaSso:ClientSecret"); // "7WrCR1w1M3DMmz2WcEkKLr-4N8EbHS-LnHnZ95Si";
+                    //options.CallbackPath = new PathString("/signin-oidc");
+
+                    #region Mapping Claims
+                 
+                    options.ClaimActions.MapUniqueJsonKey("LastName", "LastName", ClaimValueTypes.String);
+                    options.ClaimActions.MapUniqueJsonKey("FirstName", "FirstName", ClaimValueTypes.String);
+                    options.ClaimActions.MapUniqueJsonKey("Title", "Title", ClaimValueTypes.String);
+                    options.ClaimActions.MapUniqueJsonKey("State", "State", ClaimValueTypes.String);
+                    options.ClaimActions.MapUniqueJsonKey("ManagerId", "ManagerId", ClaimValueTypes.String);
+                    options.ClaimActions.MapUniqueJsonKey("ManagerApp", "ManagerApp", ClaimValueTypes.String);
+                    options.ClaimActions.MapUniqueJsonKey("PrimaryPhone", "PrimaryPhone", ClaimValueTypes.String);
+                    options.ClaimActions.MapUniqueJsonKey("MobilePhone", "MobilePhone", ClaimValueTypes.String);
+                    options.ClaimActions.MapUniqueJsonKey("City", "City", ClaimValueTypes.String);
+                    options.ClaimActions.MapUniqueJsonKey("UserId", "UserId", ClaimValueTypes.String);
+                    options.ClaimActions.MapUniqueJsonKey("ZipCode", "ZipCode", ClaimValueTypes.String);
+                    options.ClaimActions.MapUniqueJsonKey("UserName", "EmailFromIDToken", ClaimValueTypes.String);
+                    #endregion
+
+                    //options.SignedOutRedirectUri = new PathString("/Login/Login");
+                    options.GetClaimsFromUserInfoEndpoint = true;
+                    options.ResponseType = OpenIdConnectResponseType.Code;
+                    options.ResponseMode = OpenIdConnectResponseMode.FormPost;
+                    options.Scope.Clear();
+                    options.Scope.Add(OpenIdConnectScope.OpenId);
+                    options.Scope.Add(OpenIdConnectScope.OpenIdProfile);
+                    options.Scope.Add("profile");
+                    options.TokenValidationParameters = new Microsoft.IdentityModel.Tokens.TokenValidationParameters()
+                    {
+                        ValidateIssuer = true,
+                    };
+                    options.SaveTokens = true;
+                    options.UseTokenLifetime = false;
+
+                    options.SecurityTokenValidator = jwtHandler;
+
+                    options.Events.OnRedirectToIdentityProvider = (context) =>
+                    {
+                        if (context.Request.Query.ContainsKey("idpname") || context.Request.Query.ContainsKey("carrierid") || context.Request.Query.ContainsKey("lenderid"))
+                        {
+                            correlationId = Guid.NewGuid().ToString();
+                            var idpNameParam = context.Request.Query["idpname"];
+                            var carrierIdParam = context.Request.Query["carrierid"];
+                            var lenderIdParam = context.Request.Query["lenderid"];
+
+                            var isTestOnlyParam = context.Request.Query["istestonly"];
+
+                            if (idpNameParam != StringValues.Empty || carrierIdParam != StringValues.Empty || lenderIdParam != StringValues.Empty)
+                            {
+                                var idpName = idpNameParam != StringValues.Empty ? idpNameParam[0].ToString() : null;
+                                var carrierId = carrierIdParam != StringValues.Empty ? carrierIdParam[0].ToString() : null;
+                                var lenderId = lenderIdParam != StringValues.Empty ? lenderIdParam[0].ToString() : null;
+
+                                bool isTestOnlybool = isTestOnlyParam != StringValues.Empty && !string.IsNullOrEmpty(isTestOnlyParam[0].ToString())
+                                                        && isTestOnlyParam[0].ToString() == "0" ? false : true;
+                                //isTestOnlyParam
+                                //OktaSso oktaSso = new OktaSso(_connectionString, Configuration);
+                                OktaSso oktaSso = new OktaSso(_connectionString, Configuration);
+                                var oktaIdpId = oktaSso.GetIdentityProviderDetails(idpName, carrierId, lenderId, isTestOnlybool);
+
+
+                                if (oktaIdpId == null)
+                                {
+                                    LogError(new ProcessErrorLog
+                                    {
+                                        ExceptionMessage = "IdPName NotFound for parameters idpName: " + idpName + "CarrierId: " + carrierId + "IsTestOnly: " + isTestOnlybool,
+                                        InnerExceptionMessage = "",
+                                        StackTrace = "",
+                                        MethodName = "OnRedirectToIdentityProvider",
+                                        ComputerName = System.Net.Dns.GetHostName()
+                                    });
+                                    var redirectSite = Configuration["Session:LoginRedirect"] + "FailedSso";
+                                    context.Response.Redirect(redirectSite);
+                                }
+                                else
+                                {
+                                    context.ProtocolMessage.SetParameter("idp", oktaIdpId);
+                                }
+                            }
+                        }
+                        return Task.CompletedTask;
+                    };
+
+                    options.Events.OnTokenResponseReceived = (context) =>
+                    {
+                        return Task.CompletedTask;
+                    };
+
+                    options.Events.OnTokenValidated = (context) =>
+                    {
+                        return Task.CompletedTask;
+                    };
+
+                    options.Events.OnUserInformationReceived = context =>
+                    {
+                        try
+                        {
+
+                            correlationId = Guid.NewGuid().ToString();
+                            OktaSso oktaObj = new OktaSso(_connectionString, Configuration);
+                            _ = oktaObj.ExtractUserInfoWithEmailAddress(context, correlationId);
+                            return Task.CompletedTask;
+                        }
+                        catch (Exception ex)
+                        {
+                            LogError(new ProcessErrorLog
+                            {
+                                ExceptionMessage = ex.Message,
+                                InnerExceptionMessage = (ex.InnerException?.Message),
+                                StackTrace = ex.StackTrace,
+                                MethodName = "ExtractUserInfo-OktaResponse",
+                                ComputerName = System.Net.Dns.GetHostName()
+                            });
+
+                            var appInsightLog = new AppInsightLog
+                            {
+                                StepNo = "Error 1",
+                                StepName = "ExtractUserInfo-OktaResponse",
+                                FileName = "OktaSso.cs",
+                                MethodName = "ExtractUserInfo",
+                                CorrelationId = string.IsNullOrEmpty(correlationId) ? Guid.NewGuid().ToString() : correlationId,
+                                RequestJson = string.Empty,
+                                //RequestJson = Newtonsoft.Json.JsonConvert.SerializeObject(context),
+                                IdpName = "",
+                                UserId = ""
+                            };
+                            new AppInsightLogHelper(Configuration, repo).InsertAppInsightLog(appInsightLog);
+                            var redirectSite = Configuration["Session:LoginRedirect"] + "FailedSso";
+                            context.Response.Redirect(redirectSite);
+                            return Task.FromException(ex);
+                        }
+
+                    };
+
+                    options.Events.OnTicketReceived = (context) =>
+                    {
+                        return Task.CompletedTask;
+                    };
+                });
+
+                //Configure DB managed identity settings
+                services.Configure<DbSettings>(dbConnection =>
+                {
+                    dbConnection.ConnectionString = Configuration["DbSettings:ConnectionString"];
+                    dbConnection.SqlResource = Configuration["DbSettings:SqlResource"];
+                    dbConnection.AccessProvider = new AzureServiceTokenProvider();
+                });
+
+                //Cross Site Request Forgery switch
+                IRepository repos = new Repository(_connectionString);
+                var switches = repos.getSwitchValues();
+                var xCSRFSwitch = switches["CSRFSwitch"];
+                if (Convert.ToBoolean(xCSRFSwitch))
+                {
+                    services.AddControllersWithViews(options =>
+                    options.Filters.Add(new AutoValidateAntiforgeryTokenAttribute()));
+                }
+            }
+            catch (Exception e)
+            {
+                throw new Exception(e.Message);
+            }
+        }
+
+        // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
+        public void Configure(IApplicationBuilder app, IHostingEnvironment env)
+        {
+            app.UseForwardedHeaders();
+            if (env.IsDevelopment())
+            {
+                //app.UseBrowserLink();
+                app.UseCustomExceptionHandlerMiddleware();
+                app.UseDeveloperExceptionPage();
+                app.UseExceptionHandler("/Home/Error");
+            }
+            else
+            {
+                app.UseCustomExceptionHandlerMiddleware();
+                app.UseExceptionHandler("/Home/Error");
+            }
+
+
+            IRepository repos = new Repository(_connectionString);
+            var switches = repos.getSwitchValues();
+            var xContentStsSwitch = switches["STS&XContent"];
+            var cspSwitch = switches["CSP"];
+            if (xContentStsSwitch)
+            {
+                app.UseXContentTypeOptions();
+                app.UseHsts(options => options
+                    .MaxAge(days: 365)
+                    .IncludeSubdomains()
+                    .Preload());
+            }
+            var whiteListedUris = Configuration.GetSection("CspWhiteList:urlList").Get<string[]>();
+            app.UseCspReportOnly(options => options
+                    .DefaultSources(s => s.Self())
+                    .FontSources(s => s.Self()
+                        .CustomSources(whiteListedUris))
+                    .ImageSources(s => s.Self()
+                            .CustomSources(whiteListedUris))
+                    .StyleSources(s => s.Self().UnsafeInline()
+                        .CustomSources(whiteListedUris))
+                    .ScriptSources(s => s.Self().UnsafeInline().UnsafeEval()
+                        .CustomSources(whiteListedUris))
+                    .ConnectSources(s => s.Self()
+                        .CustomSources(whiteListedUris))
+                    .ObjectSources(s => s.Self()
+                        .CustomSources(whiteListedUris))
+                    .MediaSources(s => s.Self()
+                        .CustomSources(whiteListedUris))
+                    .ManifestSources(s => s.Self()
+                        .CustomSources(whiteListedUris))
+                    .ChildSources(s => s.Self()
+                        .CustomSources(whiteListedUris))
+                    .WorkerSources(s => s.Self()
+                        .CustomSources(whiteListedUris))
+                    .ReportUris(async r =>
+                    {
+                        r.Uris(new string[] { "/common/ProcessCspValidationReport" });
+                    }));
+            if (cspSwitch)
+            {
+                app.UseCsp(options => options
+                    .DefaultSources(s => s.Self())
+                    .FontSources(s => s.Self()
+                        .CustomSources(whiteListedUris))
+                    .ImageSources(s => s.Self()
+                            .CustomSources(whiteListedUris))
+                    .StyleSources(s => s.Self().UnsafeInline()
+                        .CustomSources(whiteListedUris))
+                    .ScriptSources(s => s.Self().UnsafeInline()
+                        .CustomSources(whiteListedUris))
+                    .ConnectSources(s => s.Self()
+                        .CustomSources(whiteListedUris))
+                    .ObjectSources(s => s.Self()
+                        .CustomSources(whiteListedUris))
+                    .MediaSources(s => s.Self()
+                        .CustomSources(whiteListedUris))
+                    .ManifestSources(s => s.Self()
+                        .CustomSources(whiteListedUris))
+                    .ChildSources(s => s.Self()
+                        .CustomSources(whiteListedUris))
+                    .WorkerSources(s => s.Self()
+                        .CustomSources(whiteListedUris))
+                    .ReportUris(async r =>
+                    {
+                        r.Uris(new string[] { "/common/ProcessCspValidationReport" });
+                    }));
+            }
+            //app.UseStaticFiles();
+            //app.UseAuthentication();
+
+            //app.UseHttpsRedirection();
+
+            //app.UseRouting();
+
+            //app.UseAuthorization();
+
+            app.UseStaticFiles();
+            app.UseRouting();
+            app.UseHttpsRedirection();
+            app.UseAuthentication();
+            app.UseAuthorization();
+
+            app.UseEndpoints(endpoints =>
+            {
+                endpoints.MapControllerRoute(
+                    name: "areaRoute",
+                    pattern: "{area:exists}/{controller=Login}/{action=Index}/{id?}").RequireAuthorization(); ;
+                endpoints.MapControllerRoute(
+                    name: "CreatePasswordRoute",
+                    pattern: "{area:exists}/{controller=Login}/{action=CreatePassword}/{id?}").RequireAuthorization(); ;
+                endpoints.MapControllerRoute(
+                    name: "default",
+                    pattern: "{controller=Login}/{action=Login}/{id?}").RequireAuthorization(); ;
+            });
+
+            //app.UseMvc(routes =>
+            //{
+            //    routes.MapRoute(
+            //        name: "areaRoute",
+            //        ////template: "{area:exists}/{controller=System}/{action=Index}/{id?}");
+            //        template: "{area:exists}/{controller=Login}/{action=Index}/{id?}");
+            //    routes.MapRoute(
+            //        name: "CreatePasswordRoute",
+            //        template: "{area:exists}/{controller=Login}/{action=CreatePassword}/{id?}");
+            //    routes.MapRoute(
+            //        name: "default",
+            //        ////template: "{controller=Login}/{action=Index}/{id?}");
+            //        template: "{controller=Login}/{action=Login}/{id?}");
+            //    ////routes.MapRoute(
+            //    ////    name: "default",
+            //    ////    template: "{controller}/{action}/{id?}",
+            //    ////    defaults: new { controller = "System", action = "Index" },
+            //    ////    constraints: new { id = new IntRouteConstraint() },
+            //    ////    dataTokens: new RouteValueDictionary(new { area = "LpAdmin" })
+            //    ////    );
+            //});
+
+            app.UseCookiePolicy();
+            ////app.UseSession();
+            //Set Aspose PDF license
+            try
+            {
+                Aspose.Pdf.License license = new Aspose.Pdf.License();
+                license.SetLicense("Aspose.Pdf.lic");
+            }
+            catch (Exception ex)
+            {
+                LogError(new ProcessErrorLog
+                {
+                    ExceptionMessage = ex.Message,
+                    InnerExceptionMessage = (ex.InnerException?.Message),
+                    StackTrace = ex.StackTrace,
+                    MethodName = "Startup.Configure",
+                    ComputerName = Dns.GetHostName()
+
+                });
+            }
+        }
+
+        private void LogError(ProcessErrorLog processErrorLog)
+        {
+            IRepository repos = new Repository(_connectionString);
+            repos.LogError(processErrorLog);
+        }
+    }
+}

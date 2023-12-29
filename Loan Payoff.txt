@@ -1,0 +1,37 @@
+DT - 3
+1ST HERITAGE CREDIT
+DDI Lender -2
+1ST FRANKLIN FINANCIAL-2qqq Loan Companys
+INTG -4
+Acadia- carrier A
+Ist Capital finance - Tosca INTG
+LEX Lender 6
+109 autosales- lex lender
+-----------------
+uat
+1st capital >M.B. Enterprises, ,   DDI
+109 AUTO SALES  dt
+1ST FRANKLIN FINANCIAL > LEX LENDERUAT 
+1st Cooperative FCU  > Toyota Financial 
+IntergratedLender  INTG 
+-----------------------------------------------------------
+
+To see exception notes in core track: 
+check notes in carrier
+---------------------------------
+To verify the log document
+Create a work order, with Lpid
+Find out the lender id from Core track admin> find the lender name.
+
+Login to loan pay off as admin
+Then find lender from lenders, login as lender.
+Look for LP Id ,change in bill amount > save and confirm.
+It will generates  a log Document
+
+
+------------------------------------------------------------
+
+
+
+
+

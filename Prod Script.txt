@@ -1,0 +1,31 @@
+USE csamart
+GO
+
+
+exec dbom.dbo.usp_Data_Fix_Insert 
+@dbname = 'ProviderServices'
+,@Incident_Type = 'SN'
+,@code = '             
+
+update ProviderServices.CoreTrack.WorkOrderASAPUpdates
+set IsProcessed = 1
+where WorkOrderId = 1335955 and Poid=509318 and IsProcessed =0
+
+update ProviderServices.CoreTrack.WorkOrderASAPUpdates
+set IsProcessed = 1,
+StockNumber = 34737673
+where WorkOrderId = 1343564 and Poid=522721 and IsProcessed =0
+
+update ProviderServices.CoreTrack.WorkOrderASAPUpdates
+set IsProcessed = 1
+where WorkOrderId = 1345499 and Poid=525966 and IsProcessed =0
+
+              '
+,@incident = 'INC0594642'
+,@Email = 'srujan.reddy@iaai.com'
+,@Notes = 'CoreTrack'
+
+
+
+------
+

@@ -1,0 +1,265 @@
+using System;
+using System.Collections.Generic;
+using System.IdentityModel.Tokens.Jwt;
+using System.Linq;
+using System.Security.Claims;
+using System.Threading.Tasks;
+using LoanPayoff.Models;
+using LoanPayoff.Service;
+using LoanPayoff.Service.Interfaces;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Configuration;
+
+namespace LoanPayoff.Web.Utilities
+{
+    public class OktaSso
+    {
+        private readonly string _connectionString;
+        private readonly IConfiguration _iconfiguration;
+        IRepository repos;
+
+
+
+        public OktaSso(string connectionString, IConfiguration iconfiguration)
+        {
+            _connectionString = connectionString;
+            _iconfiguration = iconfiguration;
+        }
+
+
+        public void ExtractUserInfo(Microsoft.AspNetCore.Authentication.OpenIdConnect.UserInformationReceivedContext context, string correlationId)
+        {
+            //IRepository repos = new Repository(_connectionString);
+            //try
+            //{
+            string rawAccessToken = context.ProtocolMessage.AccessToken;
+            var handler = new JwtSecurityTokenHandler();
+            var accessToken = handler.ReadJwtToken(rawAccessToken);
+
+            string rawIdToken = context.ProtocolMessage.IdToken;
+            var idToken = handler.ReadJwtToken(rawIdToken);
+            ClaimsIdentity identity = (ClaimsIdentity)context.Principal.Identity;
+
+            var idp = idToken.Claims.FirstOrDefault(c => c.Type == SsoConstants.Idp) != null ? idToken.Claims.FirstOrDefault(c => c.Type == SsoConstants.Idp).Value : string.Empty;
+            var firstName = accessToken.Claims.FirstOrDefault(c => c.Type == SsoConstants.FirstName) != null ? accessToken.Claims.FirstOrDefault(c => c.Type == SsoConstants.FirstName).Value : string.Empty;
+            var lastName = accessToken.Claims.FirstOrDefault(c => c.Type == SsoConstants.LastName) != null ? accessToken.Claims.FirstOrDefault(c => c.Type == SsoConstants.LastName).Value : string.Empty;
+            var email = accessToken.Claims.FirstOrDefault(c => c.Type == SsoConstants.Email) != null ? accessToken.Claims.FirstOrDefault(c => c.Type == SsoConstants.Email).Value : string.Empty;
+            var title = accessToken.Claims.FirstOrDefault(c => c.Type == SsoConstants.Title) != null ? accessToken.Claims.FirstOrDefault(c => c.Type == SsoConstants.Title).Value : string.Empty;
+            var primaryPhone = accessToken.Claims.FirstOrDefault(c => c.Type == SsoConstants.PrimaryPhone) != null ? accessToken.Claims.FirstOrDefault(c => c.Type == SsoConstants.PrimaryPhone).Value : ""; 
+            var mobilePhone = accessToken.Claims.FirstOrDefault(c => c.Type == SsoConstants.MobilePhone) != null ? accessToken.Claims.FirstOrDefault(c => c.Type == SsoConstants.MobilePhone).Value : string.Empty;
+            var city = accessToken.Claims.FirstOrDefault(c => c.Type == SsoConstants.City) != null ? accessToken.Claims.FirstOrDefault(c => c.Type == SsoConstants.City).Value : string.Empty;
+            var state = accessToken.Claims.FirstOrDefault(c => c.Type == SsoConstants.State) != null ? accessToken.Claims.FirstOrDefault(c => c.Type == SsoConstants.State).Value : string.Empty;
+            var zipCode = accessToken.Claims.FirstOrDefault(c => c.Type == SsoConstants.ZipCode) != null ? accessToken.Claims.FirstOrDefault(c => c.Type == SsoConstants.ZipCode).Value : string.Empty;
+            var managerId = accessToken.Claims.FirstOrDefault(c => c.Type == SsoConstants.ManagerId) != null ? accessToken.Claims.FirstOrDefault(c => c.Type == SsoConstants.ManagerId).Value : string.Empty;
+            var userId = accessToken.Claims.FirstOrDefault(c => c.Type == SsoConstants.UserId) != null ? accessToken.Claims.FirstOrDefault(c => c.Type == SsoConstants.UserId).Value : string.Empty;
+
+            //var honorificPrefix = accessToken.Claims.FirstOrDefault(c => c.Type == SsoConstants.HonorificPrefix) != null ? accessToken.Claims.FirstOrDefault(c => c.Type == SsoConstants.HonorificPrefix).Value : string.Empty;
+            //var honorificSuffix = accessToken.Claims.FirstOrDefault(c => c.Type == SsoConstants.HonorificSuffix) != null ? accessToken.Claims.FirstOrDefault(c => c.Type == SsoConstants.HonorificSuffix).Value : string.Empty;
+            //var correlationId = idToken.Claims.FirstOrDefault(c => c.Type == SsoConastants.CorrelationId) != null ? idToken.Claims.FirstOrDefault(c => c.Type == SsoConastants.CorrelationId).Value : string.Empty;
+
+            var name = new Claim(SsoConstants.UserName, email);
+                var firstNameClaim = new Claim(SsoConstants.FirstName, firstName);
+                var lastNameClaim = new Claim(SsoConstants.LastName, lastName);
+                var emailClaim = new Claim(SsoConstants.Email, email);
+                var titleClaim = new Claim(SsoConstants.Title, title);
+                var idpClaim = new Claim(SsoConstants.IdentityProviderId, idp);
+                var primaryPhoneClaim = new Claim(SsoConstants.PrimaryPhone, primaryPhone);
+                var mobilePhoneClaim = new Claim(SsoConstants.MobilePhone, mobilePhone);
+                var cityClaim = new Claim(SsoConstants.City, city);
+                var stateClaim = new Claim(SsoConstants.State, state);
+                var ZipCodeClaim = new Claim(SsoConstants.ZipCode, zipCode);
+
+                var managerIdClaim = new Claim(SsoConstants.ManagerId, managerId);
+                var userIdClaim = new Claim(SsoConstants.UserId, userId);
+                var correlationIdClaim = new Claim(SsoConstants.CorrelationId, correlationId);
+
+                var claimsToKeep = new List<Claim> { name, firstNameClaim, lastNameClaim, emailClaim, titleClaim, idpClaim, primaryPhoneClaim, mobilePhoneClaim
+                    , stateClaim, managerIdClaim, userIdClaim, cityClaim, ZipCodeClaim, correlationIdClaim };
+
+                var newIdentity = new ClaimsIdentity(claimsToKeep, identity.AuthenticationType);
+                context.Principal = new ClaimsPrincipal(newIdentity);
+
+            //}
+            //catch(Exception ex) {
+            //    repos.LogError(new ProcessErrorLog
+            //    {
+            //        ExceptionMessage = ex.Message,
+            //        InnerExceptionMessage = (ex.InnerException?.Message),
+            //        StackTrace = ex.StackTrace,
+            //        MethodName = "ExtractUserInfo-OktaResponse",
+            //        ComputerName = System.Net.Dns.GetHostName()
+            //    });
+
+            //    var appInsightLog = new AppInsightLog
+            //    {
+            //        StepNo = "Error 1",
+            //        StepName = "ExtractUserInfo-OktaResponse",
+            //        FileName = "OktaSso.cs",
+            //        MethodName = "ExtractUserInfo",
+            //        CorrelationId = string.IsNullOrEmpty(correlationId) ? Guid.NewGuid().ToString() : correlationId,
+            //        RequestJson = Newtonsoft.Json.JsonConvert.SerializeObject(context),
+            //        IdpName = "",
+            //        UserId = ""
+            //    };
+            //    new AppInsightLogHelper(_iconfiguration).InsertAppInsightLog(appInsightLog);
+            //}
+        }
+
+
+        public async Task<LoginDetail> ExtractUserInfoWithEmailAddress(Microsoft.AspNetCore.Authentication.OpenIdConnect.UserInformationReceivedContext context, string correlationId)
+        {
+
+            string rawAccessToken = context.ProtocolMessage.AccessToken;
+            var handler = new JwtSecurityTokenHandler();
+            var accessToken = handler.ReadJwtToken(rawAccessToken);
+
+            ///Get Default Claims on userinformation received from OKTA
+
+            var title = accessToken.Claims.FirstOrDefault(c => c.Type == SsoConstants.Title) != null ? accessToken.Claims.FirstOrDefault(c => c.Type == SsoConstants.Title).Value : string.Empty;
+            var primaryPhone = accessToken.Claims.FirstOrDefault(c => c.Type == SsoConstants.PrimaryPhone) != null ? accessToken.Claims.FirstOrDefault(c => c.Type == SsoConstants.PrimaryPhone).Value : "";
+            var mobilePhone = accessToken.Claims.FirstOrDefault(c => c.Type == SsoConstants.MobilePhone) != null ? accessToken.Claims.FirstOrDefault(c => c.Type == SsoConstants.MobilePhone).Value : string.Empty;
+            var city = accessToken.Claims.FirstOrDefault(c => c.Type == SsoConstants.City) != null ? accessToken.Claims.FirstOrDefault(c => c.Type == SsoConstants.City).Value : string.Empty;
+            var state = accessToken.Claims.FirstOrDefault(c => c.Type == SsoConstants.State) != null ? accessToken.Claims.FirstOrDefault(c => c.Type == SsoConstants.State).Value : string.Empty;
+            var zipCode = accessToken.Claims.FirstOrDefault(c => c.Type == SsoConstants.ZipCode) != null ? accessToken.Claims.FirstOrDefault(c => c.Type == SsoConstants.ZipCode).Value : string.Empty;
+            var managerId = accessToken.Claims.FirstOrDefault(c => c.Type == SsoConstants.ManagerId) != null ? accessToken.Claims.FirstOrDefault(c => c.Type == SsoConstants.ManagerId).Value : string.Empty;
+
+            //Get User Details from DB and add it to claims contect.
+            IRepository repos = new Repository(_connectionString);
+            var c = context.Principal.Claims.FirstOrDefault(c => c.Type == SsoConstants.EmailAddress);
+            LoginInfo loginInfo = await repos.GetLoginInfoByUserName(c.Value.Split('@')[0]);
+
+            LoginDetail userInfo = repos.GetLoginDetailsByUserId(loginInfo.UserId, true);
+            var uInfo = userInfo?.Version != null ? userInfo?.Version.ToString() : string.Empty;
+            var sTime = userInfo?.SessionTime != null ? userInfo?.SessionTime.ToString() : string.Empty;
+            var crId = userInfo?.CarrierRegionId != null ? userInfo?.CarrierRegionId.ToString() : string.Empty;
+            var tkn = userInfo?.Token != null ? userInfo?.Token.ToString() : string.Empty;
+            var caHd = userInfo?.CarrierHeader != null ? userInfo?.CarrierHeader.ToString() : string.Empty;
+            var dHd = userInfo?.DealerHeader != null ? userInfo?.DealerHeader.ToString() : string.Empty;
+            var lHd = userInfo?.LenderHeader != null ? userInfo?.LenderHeader.ToString() : string.Empty;
+
+            var isSv = userInfo?.IsSupervisor != null ? userInfo?.IsSupervisor.ToString() : string.Empty;
+            var isSd = userInfo?.IsSuperadmin != null ? userInfo?.IsSuperadmin.ToString() : string.Empty;
+
+
+            var vPod = userInfo?.ViewAllPOs != null ? userInfo?.ViewAllPOs.ToString() : string.Empty;
+            var uwGid = userInfo?.UserWorkGroupID != null ? userInfo?.UserWorkGroupID.ToString() : string.Empty;
+            var fName = userInfo?.FirstName != null ? userInfo?.FirstName.ToString() : string.Empty;
+            var lName = userInfo?.LastName != null ? userInfo?.LastName.ToString() : string.Empty;
+
+            ClaimsIdentity identity = (ClaimsIdentity)context.Principal.Identity;
+            #region Creating UserInfo Claims
+
+            var cTitle= new Claim(SsoConstants.Title, title);
+            var cPhone = new Claim(SsoConstants.PrimaryPhone, primaryPhone);
+            var cMobilephone = new Claim(SsoConstants.MobilePhone, mobilePhone);
+            var cCity = new Claim(SsoConstants.City, city);
+            var cState = new Claim(SsoConstants.State ,state);
+            var cZip = new Claim(SsoConstants.ZipCode, zipCode);
+            var cManagerId = new Claim(SsoConstants.ManagerId, managerId);
+
+            var isSupervisor = new Claim(SsoConstants.IsSupervisor, isSv);
+            var isSuperadmin = new Claim(SsoConstants.IsSuperadmin, isSd);
+            var viewAllPOs = new Claim(SsoConstants.ViewAllPOs, vPod);
+            var userWorkGroupID = new Claim(SsoConstants.UserWorkGroupID, uwGid);
+            var carrierHeader = new Claim(SsoConstants.CarrierHeader, caHd);
+
+            var dealerHeader = new Claim(SsoConstants.DealerHeader, dHd);
+            var lenderHeader = new Claim(SsoConstants.LenderHeader, lHd);
+
+            var version = new Claim(SsoConstants.Version, uInfo);
+            var token = new Claim(SsoConstants.Token, tkn);
+            var sessionTime = new Claim(SsoConstants.SessionTime, sTime);
+            var carrierRegionId = new Claim(SsoConstants.CarrierRegionId, crId);
+            var poTag = new Claim(SsoConstants.PO_Tag, userInfo?.PO_Tag.ToString());
+            var completeLenderCoverage = new Claim(SsoConstants.CompleteLenderCoverage, userInfo?.CompleteLenderCoverage.ToString());
+            var firstNameClaim = new Claim(SsoConstants.FirstName, fName);
+            var lastNameClaim = new Claim(SsoConstants.LastName, lName);
+
+            #endregion Ends  UserInfo Claims
+
+
+
+            #region Creating Current Session Claims
+            var userClaim = new Claim(SsoConstants.UserId, loginInfo?.UserId.ToString());
+
+
+            string ipAddress = context.HttpContext.Connection.LocalIpAddress.MapToIPv4().ToString();
+            string proxyIpAddress = context.HttpContext.Connection.LocalIpAddress.MapToIPv4().ToString();
+
+            //End getting the IP ADDRESS
+
+            //CREATE A USER SESSION
+            var isSsoLogin = true;
+            userInfo.CurrentSession = await repos.CreateSession(loginInfo.UserId, ipAddress, proxyIpAddress,
+                                                                   isSsoLogin, correlationId);
+
+            //userInfo.CurrentSession = await repos.CreateSession(loginInfo.UserId);
+            var carrierClaim = new Claim(SsoConstants.CarrierId, userInfo?.CurrentSession?.CarrierId.ToString());
+            var lenderClaim = new Claim(SsoConstants.LenderId, userInfo?.CurrentSession?.LenderId.ToString());
+            var dealerClaim = new Claim(SsoConstants.DealerId, userInfo?.CurrentSession?.DealerId.ToString());
+            var isDemoUser = new Claim(SsoConstants.IsDemoUser, userInfo?.CurrentSession?.IsDemoUser.ToString());
+            var isActive = new Claim(SsoConstants.IsActive, userInfo?.IsActive.ToString());
+            var showNewCarrierDesign = new Claim(SsoConstants.ShowNewCarrierDesign, userInfo?.CurrentSession?.ShowNewCarrierDesign.ToString());
+            var payoffQuoteOnly = new Claim(SsoConstants.PayoffQuoteOnly, userInfo?.CurrentSession?.PayoffQuoteOnly.ToString());
+            var carrierPOTag = new Claim(SsoConstants.CarrierPOTag, userInfo?.CurrentSession?.CarrierPOTag.ToString());
+            var lenderAllowsGapInsurance = new Claim(SsoConstants.LenderAllowsGapInsurance, userInfo?.CurrentSession?.LenderAllowsGapInsurance.ToString());
+            var isCoreTrackUser = new Claim(SsoConstants.IsCoreTrackUser, userInfo?.CurrentSession?.IsCoreTrackUser.ToString());
+            var ctUID = userInfo?.CurrentSession?.CoreTrackUserId != null ? userInfo?.CurrentSession?.CoreTrackUserId.ToString() : String.Empty;
+            var coreTrackUserId = new Claim(SsoConstants.CoreTrackUserId, ctUID);
+            #endregion Ends  Current Session Claims
+
+            #region Default claims
+            identity.AddClaim(cTitle);
+            identity.AddClaim(cPhone);
+            identity.AddClaim(cMobilephone);
+            identity.AddClaim(cCity);
+            identity.AddClaim(cState);
+            identity.AddClaim(cZip);
+            identity.AddClaim(cManagerId);
+            #endregion
+
+            identity.AddClaim(userClaim);
+            identity.AddClaim(carrierClaim);
+            identity.AddClaim(lenderClaim);
+            identity.AddClaim(lenderClaim);
+            identity.AddClaim(isDemoUser);
+            identity.AddClaim(isActive);
+            identity.AddClaim(showNewCarrierDesign);
+            identity.AddClaim(payoffQuoteOnly);
+            identity.AddClaim(carrierPOTag);
+            identity.AddClaim(lenderAllowsGapInsurance);
+            identity.AddClaim(isCoreTrackUser);
+            identity.AddClaim(coreTrackUserId);
+
+
+            identity.AddClaim(isSupervisor);
+            identity.AddClaim(isSuperadmin);
+            identity.AddClaim(viewAllPOs);
+            identity.AddClaim(userWorkGroupID);
+            identity.AddClaim(carrierHeader);
+            identity.AddClaim(dealerHeader);
+            identity.AddClaim(lenderHeader);
+            identity.AddClaim(version);
+            identity.AddClaim(token);
+            identity.AddClaim(sessionTime);
+            identity.AddClaim(carrierRegionId);
+            identity.AddClaim(poTag);
+            identity.AddClaim(completeLenderCoverage);
+            identity.AddClaim(firstNameClaim);
+            identity.AddClaim(lastNameClaim);
+
+
+            return userInfo;
+        }
+        public string GetIdentityProviderDetails(string idpName, string carrierId, string lenderid, bool isTestOnly)
+        {
+            IRepository repos = new Repository(_connectionString);
+            var idpId = repos.GetIdentityProviderDetails(idpName, carrierId, lenderid, isTestOnly);
+            if (idpId != null)
+                return idpId.Result;
+
+            // TO DO: Log as error ? 
+            return string.Empty;
+        }
+    }
+}

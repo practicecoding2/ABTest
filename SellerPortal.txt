@@ -1,0 +1,21 @@
+SELECT top 1 LTRIM(RTRIM(dw.dw_user_id)) as CSAUserId,sp.Salvage_Provider_ID as SalvageProviderId,sp.salvage_provider_name as SalvageProviderName,
+cdssd.Security_Indicator_Name as SecurityName,Security_Indicator_Value as SecurityIndicatorValue
+FROM csamart.dbo.CSAT_Salvage_Provider_Employee spe WITH(NOLOCK)
+INNER JOIN csamart.dbo.CSAT_SPEmployee_to_SPOffice_Xref xref WITH(NOLOCK)
+ON spe.Employee_ID = xref.Employee_ID
+INNER JOIN MRT_ASAP_Rep..Salvage_Provider sp WITH(nolock)
+       ON xref.Office_ID = sp.salvage_provider_id
+INNER JOIN csamart..dw_user dw WITH(NOLOCK)
+       ON spe.dw_user_id = dw.dw_user_id
+inner join csamart.dbo.csat_dw_user_info cdui with(nolock)
+       on dw.dw_user_id = cdui.dw_user_id
+left join csamart.dbo.csat_dw_user_security_indicator csusi with(nolock)
+       on cdui.Profile_Detail_ID = csusi.Profile_Detail_ID
+left join csamart.dbo.CSAT_DW_User_Security_Section_Details cdssd with(nolock)
+       on csusi.Security_Indicator_ID = cdssd.Security_Indicator_ID
+WHERE 1 = 1
+and sp.Salvage_Provider_Group_ID = 1
+and csusi.Security_Indicator_ID = 9220
+and csusi.Security_Indicator_Value = 1
+and dw.login_disabled_ind = 1
+ORDER BY sp.Salvage_Provider_Name

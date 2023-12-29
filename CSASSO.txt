@@ -1,0 +1,20 @@
+
+https://qa.csatoday.iaai.com/Login/Login/SingleSignOn?salvageProviderGroupId=216&isTestOnly=true
+http://localhost:51158/Login/Login/SingleSignOn?salvageProviderGroupId=216&isTestOnly=true
+    IAA - Signing in...
+hanoverssorole
+iaalab\hanoverssorole
+t$ST9999
+
+select top 10 * from csat_dw_user_info where adjuster_first_name = 'sar'
+select top 10 * from MRT_ASAP_Rep.dbo.User_Info where EMail_Address_1 = 'sdr@hanover.com'
+
+
+10.124.9.5
+P@ssw0rd123
+
+
+select * from dbo.identityproviders
+
+[dbo].[SsoLoginUserDetails]  
+

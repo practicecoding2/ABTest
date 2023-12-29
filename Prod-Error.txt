@@ -1,0 +1,12 @@
+ErrorMessage: Bad CSV file was generated, SchedulerId : 78003, RequestUrl: https://csatoday.iaai.com/PendingBidApproval_Alert_Report.aspx?Scheduler=y&CSAT_Scheduler_Id=78003&ScheduleName=Pending Bids&UserId=kyorenrc&Status=True&ReportName=Vehicles Pending Bid Approval&ReportLevel=PendingBidApprovalAlert&SendReport=Hourly&LastRun=11/14/2023 7:33:00 AM&NextRun=11/14/2023 8:33:00 AM&AreaNames=All IAA Areas&Branches=ALL&CCAddress=&CCReport=False&EmailCC=&EmailTo=kyore@iaai.com&EmpProfile=ALL&Format=CSV&OffNm=ALL&OmitClaimNumber=False&SendMeReport=True&SendEmailAddress=kyore@iaai.com
+
+
+http://localhost:51158/PendingBidApproval_Alert_Report.aspx?Scheduler=y
+
+http://localhost:51158/PendingBidApproval_Alert_Report.aspx?Scheduler=y&CSAT_Scheduler_Id=75288&ScheduleName=Test- Vehicles Pending Bid Approval&UserId=alawrence&Status=True&ReportName=Vehicles Pending Bid Approval&ReportLevel=PendingBidApprovalAlert&SendReport=Hourly&LastRun=11/14/2023 10:21:00 AM&NextRun=11/14/2023 11:21:00 AM&AreaNames=All IAA Areas&Branches=ALL&CCAddress=ushasri.kandagatla@iaai.com&CCReport=True&EmailCC=ushasri.kandagatla@iaai.com&EmailTo=alawrence@iaai.com&EmpProfile=ALL&Format=CSV&OffNm=ALL&OmitClaimNumber=False&SendMeReport=True&SendEmailAddress=alawrence@iaai.com;ushasri.kandagatla@iaai.com
+
+
+http://localhost:51158/PendingBidApproval_Alert_Report.aspx?Scheduler=y&CSAT_Scheduler_Id=76901&ScheduleName=PendingBidApproval_11102023&UserId=alawrence&Status=True&ReportName=Vehicles Pending Bid Approval&ReportLevel=PendingBidApprovalAlert&SendReport=Hourly&LastRun=11/14/2023 9:00:00 AM&NextRun=11/14/2023 12:35:00 PM&AreaNames=All IAA Areas&Branches=ALL&CCAddress=suresh.kaushik@iaai.com;srujan.reddy@iaai.com&CCReport=True&EmailCC=suresh.kaushik@iaai.com;srujan.reddy@iaai.com&EmailTo=atromble@iaai.com&EmpProfile=ALL&Format=CSV&OffNm=ALL&OmitClaimNumber=False&SendMeReport=True&SendEmailAddress=atromble@iaai.com;suresh.kaushik@iaai.com;srujan.reddy@iaai.com
+
+
+

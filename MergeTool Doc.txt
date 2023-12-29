@@ -1,0 +1,11 @@
+  video url for merge tool
+  https://web.microsoftstream.com/video/e6450d25-0365-4bb7-a169-0a48a0c6c592?search=merge
+  
+  Steps: clone merge tool repo.
+  add email list in config or we can hard code in program .cs where we call email lisyt
+  get a token
+  to get token
+  go to azure dash board> click on icon beside user > get anew token
+  enter a name, enter date of expiry.
+  generate 
+  save that and paste in con

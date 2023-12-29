@@ -1,0 +1,445 @@
+using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace LoanPayoff.Models
+{
+    public class Users
+    {
+        public List<UserDetail> UserDetails { get; set; }
+        public string Name { get; set; }
+        public int Id { get; set; }
+        //        public string ParentName { get; set; }
+        //        public int ParentId { get; set; }
+        public PagingDetail PagingDetail { get; set; }
+        public string Dealerfilter { get; set; }
+        public string Lenderfilter { get; set; }
+        public string Carrierfilter { get; set; }
+        public string Regionfilter { get; set; }
+        public string IaaLPfilter { get; set; }
+
+    }
+    public class GuideWireSSOInput
+    {
+        public int POId { get; set; }
+        public int IsTestOnly { get; set; }
+        public bool IsCarrier { get; set; }
+    }
+
+    public class IdentityProvider
+    {
+        public int LenderId { get; set; }
+        public int CarrierId { get; set; }
+        public string IdpId { get; set; }
+        public string IdpName { get; set; }
+        public int IdentityProviderId { get; set; }
+
+    }
+    public class LoginDetail
+    {
+        public SessionDetail CurrentSession { get; set; } = new SessionDetail();
+        //public int LenderId { get; set; }
+        //public int CarrierId { get; set; }
+        //public int DealerId { get; set; }
+        //public int UserId { get; set; }
+        public string UserName { get; set; }
+        public string Name { get; set; }
+        public bool IsActive { get; set; }
+        public string FirstName { get; set; }
+        public string LastName { get; set; }
+        public string EmailId { get; set; }
+        public bool IsAdmin { get; set; }
+        public bool IsSupervisor { get; set; }
+        public bool IsSuperadmin { get; set; }
+        public bool ViewAllPOs { get; set; }
+        public int UserWorkGroupID { get; set; }
+
+
+        public bool IsDemoUser { get; set; }
+        public string CarrierHeader { get; set; }
+        public string DealerHeader { get; set; }
+        public string LenderHeader { get; set; }
+        public string Version { get; set; }
+        public string Token { get; set; }
+        public string SessionTime { get; set; }
+        public int CarrierRegionId { get; set; }
+        //public int MaxTimeOut { get; set; }
+        //public DateTime LastActionTime { get; set; }
+        public bool IsParentLender { get; set; }
+        public bool AT_Flag { get; set; }
+        public List<string> WhitelistedIPAddresses { get; set; }
+        public bool ShowWriteOffWidget { get; set; }
+
+        public IPRangeExist IPAddressRangeExist { get; set; }
+
+        public bool PopulateAccNoWithVin { get; set; }
+        public bool PO_Tag { get; set; }
+
+        public bool CompleteLenderCoverage { get; set; }
+
+
+        public int LoginAttemptCount { get; set; }
+        public bool IsSuperAdmin { get; set; }
+        public bool IsAdministrator { get; set; }
+        public bool IsAdminLockout { get; set; }
+        public short UserMaxLockoutLimit { get; set; }
+        public bool SSOLogging { get; set; }
+    }
+
+    public class SessionDetail
+    {
+        public int LenderId { get; set; }
+        public int CarrierId { get; set; }
+        public int DealerId { get; set; }
+        public int UserId { get; set; }
+        public int MaxTimeOut { get; set; }
+        public bool IsDemoUser { get; set; }
+        public DateTime LastActionTime { get; set; }
+        public bool ShowNewCarrierDesign { get; set; }
+        public bool DisplayAwaitingTitleWidget { get; set; }
+        public string SessionToken { get; set; }
+        public string CorrelationId { get; set; }
+        public bool IsSsoLogin { get; set; }
+        public bool PartialAssignmentWidget { get; set; }
+        public bool PayoffQuoteOnly { get; set; }
+        public bool CarrierAllowsGapInsurance { get; set; }
+        public bool CarrierPOTag { get; set; }
+        public bool LenderAllowsGapInsurance { get; set; }
+        public bool IsCoreTrackUser { get; set; }
+        public string CoreTrackUserId { get; set; }
+    }
+
+    public class UserDetail
+    {
+        public long PersonId { get; set; }
+        public int ParentId { get; set; }
+        public string Segment { get; set; }
+
+        public int LenderId { get; set; }
+        public string LenderTradeName { get; set; }
+        public string LenderWorkGroup { get; set; }
+        public int CarrierId { get; set; }
+        public string CarrierTradeName { get; set; }
+        public string CarrierRegion { get; set; }
+        public int DealerId { get; set; }
+        public string DealerTradeName { get; set; }
+        public string DealerStoreName { get; set; }
+        public int UserId { get; set; }
+        public string Name { get; set; }
+        public string UserName { get; set; }
+        public string Organization { get; set; }
+        public string Securitylevel { get; set; }
+        public string Contact { get; set; }
+        public bool IsActive { get; set; }
+        public string FirstName { get; set; }
+        public string LastName { get; set; }
+        public string Email { get; set; }
+        public string PhoneDesk { get; set; }
+        public string PhoneCell { get; set; }
+        public string PhoneOther { get; set; }
+        public string Fax { get; set; }
+        public int RegionId { get; set; }
+        public bool IsAdmin { get; set; }
+        public bool IsSupervisor { get; set; }
+        public bool IsDemoUser { get; set; }
+        public bool IsDefaultContact { get; set; }
+        public bool GetsNotificationEmail { get; set; }
+        public int ContactType { get; set; }
+        public string Password { get; set; }
+        public string PasswordMatch { get; set; }
+        public int ActiveApplications { get; set; }
+        public int ActiveRecords { get; set; }
+        public string RegionAlias { get; set; }
+        public long LenderWorkGroupId { get; set; }
+        public bool GetsUrgentEmails { get; set; }
+        public bool GetsWarningEmails { get; set; }
+        public long UpdateUserId { get; set; }
+        public bool IsAdminLockout { get; set; }
+        public bool IsPasswordSet { get; set; }
+        public bool IsOktaPasswordSet { get; set; }
+        public bool PaymentWriteOffPermission { get; set; }
+        public bool ShowPayWriteOffPerm { get; set; }
+    }
+
+    public class RegionInfo
+    {
+        public int RegionId { get; set; }
+        public string RegionValue { get; set; }
+        public string RegionDescription { get; set; }
+    }
+
+    public class UserInfo
+    {
+        public UserDetail UserDetail { get; set; }
+        public List<Workgroup> WorkgroupOptions { get; set; }
+        public List<RegionInfo> regionInfo { get; set; }
+        public string ParentName { get; set; }
+        public string Segment { get; set; }
+        public bool OktaActivation { get; set; }
+        public bool IsOktaPasswordSet { get; set; }
+
+        
+
+    }
+
+    public class SaveUserRequest
+    {
+        public UserDetail User { get; set; }
+        public string RequestAction { get; set; }
+        public string Token { get; set; }
+    }
+
+    public class OktaRequest
+    {
+        public string UserName { get; set; }
+        public string Email { get; set; }
+    }
+
+    public class LenderUserDetails
+    {
+        public List<LenderUserDetail> LenderUserDetailList { get; set; }
+        public List<Workgroup> WorkgroupOptions { get; set; }
+        public string CurrentWorkGroup { get; set; }
+    }
+
+    public class DealerUserDetails
+    {
+        public List<DealerUserDetail> DealerUserDetailList { get; set; }
+        public List<Store> StoreOptions { get; set; }
+        public string CurrentStore { get; set; }
+    }
+
+    public class LenderUserDetail
+    {
+        public long UserId { get; set; }
+        public string Name { get; set; }
+        public string Contact { get; set; }
+        public string UserName { get; set; }
+        public string WorkGroup { get; set; }
+        public string SecurityLevel { get; set; }
+        public string IsActive { get; set; }
+        public bool ShowRow { get; set; }
+        public string WorkGroupId { get; set; }
+    }
+
+    public class DealerUserDetail
+    {
+        public long UserId { get; set; }
+        public string Name { get; set; }
+        public string Contact { get; set; }
+        public string UserName { get; set; }
+        public string Store { get; set; }
+        public string SecurityLevel { get; set; }
+        public string IsActive { get; set; }
+        public bool ShowRow { get; set; }
+        public string StoreId { get; set; }
+        public long ActiveRecordCount { get; set; }
+    }
+
+    public class LoginParams
+    {
+        public string Email { get; set; }
+        public string UserName { get; set; }
+        public string Password { get; set; }
+        public bool IsEncrypt { get; set; }
+    }
+
+    public class LoginInfo : LoginParams
+    {
+        public string Salt { get; set; }
+        public long UserId { get; set; }
+        public int LoginAttemptCount { get; set; }
+        public bool IsSuperAdmin { get; set; }
+        public bool IsAdministrator { get; set; }
+        public bool IsSupervisor { get; set; }
+        public bool IsActive { get; set; }
+
+        public bool IsDemoUser { get; set; }
+        public bool IsAdminLockout { get; set; }
+        public short UserMaxLockoutLimit { get; set; }
+        public bool SSOLogging { get; set; }
+        public bool ViewAllPOs { get; set; }
+
+
+    }
+
+    public class SsoLoginRequest
+    {
+        public string UserId { get; set; }
+        //public string PhoneNumber { get; set; }
+        //public string MobileNumber { get; set; }
+        public string FirstName { get; set; }
+        public string LastName { get; set; }
+        public string MiddleName { get; set; }
+        public string HonorificPrefix { get; set; }
+        public string HonorificSuffix { get; set; }
+        public string EmailAddress { get; set; }
+        public string Title { get; set; }
+        public string DisplayName { get; set; }
+        public string NickName { get; set; }
+        public string ProfileUrl { get; set; }
+        public string SecondaryEmail { get; set; }
+        public string MobilePhone { get; set; }
+        public string PrimaryPhone { get; set; }
+        public string StreetAddress { get; set; }
+        public string City { get; set; }
+        public string State { get; set; }
+        public string ZipCode { get; set; }
+        public string CountryCode { get; set; }
+        public string PostalAddress { get; set; }
+        public string PreferredLanguage { get; set; }
+        public string Locale { get; set; }
+        public string TimeZone { get; set; }
+        public string UserType { get; set; }
+        public string EmployeeNumber { get; set; }
+        public string CostCenter { get; set; }
+        public string Organization { get; set; }
+        public string Division { get; set; }
+        public string Department { get; set; }
+        public string ManagerId { get; set; }
+        public string Manager { get; set; }
+        public string AccountName { get; set; }
+        public string SupervisorId { get; set; }
+        public string ManagerDN { get; set; }
+        public string IdpId { get; set; }
+        public string CorrelationId { get; set; }
+    }
+
+    public class UserPassword
+    {
+        public string Salt { get; set; }
+        public string Password { get; set; }
+    }
+    public class LpAdminLenderUserRequest
+    {
+        public string segment { get; set; }
+        public int parentId { get; set; }
+        public int userId { get; set; }
+        public bool showHeader { get; set; }
+    }
+
+    public class SsoLoginResponse : LoginDetail
+    {
+        public long UserId { get; set; }
+
+    }
+
+    public class UserListSearchRequest
+    {
+        public string UserName { get; set; }
+        public string FirstName { get; set; }
+        public string LastName { get; set; }
+        public string EmailId { get; set; }
+        public string CompanyName { get; set; }
+        public bool IsIaaUser { get; set; }
+        public long CompanyId { get; set; }
+        public string CompanyType { get; set; }
+        public long CurrentPage { get; set; }
+        public long PageSize { get; set; }
+        public string SortColumn { get; set; }
+        public string SortDirection { get; set; }
+    }
+
+    public class UserWorkList
+    {
+        public List<UserWorkListDetail> UserDetails { get; set; }
+        public PagingDetail Paging { get; set; }
+    }
+
+    public class UserWorkListDetail
+    {
+        public long UserId { get; set; }
+        public string UserName { get; set; }
+        public string FirstName { get; set; }
+        public string LastName { get; set; }
+        public string EmailId { get; set; }
+        public string CompanyName { get; set; }
+        public string SecurityLevel { get; set; }
+        public string ActiveRecord { get; set; }
+        public string ActiveStatus { get; set; }
+    }
+
+    public class IPRangeExist
+    {
+        public bool? IsIPRangeExists { get; set; }
+        public string WhileListedIP { get; set; }
+
+    }
+
+    public class ValidatePasswordResult
+    {
+        public string Password { get; set; }
+        public string Purpose { get; set; }
+        public bool IsValid { get; set; }
+    }
+
+    public class OktaPasswordStatus
+    {
+        public string status { get; set; }
+    }
+
+    // Root myDeserializedClass = JsonConvert.DeserializeObject<List<Root>>(myJsonResponse);
+    public class Credentials
+    {
+        public Password password { get; set; }
+       
+        public Provider provider { get; set; }
+    }
+
+  
+
+    public class Links
+    {
+        public Self self { get; set; }
+    }
+
+    public class Password
+    {
+    }
+
+    public class Profile
+    {
+        public string firstName { get; set; }
+        public string lastName { get; set; }
+        public object mobilePhone { get; set; }
+        public object secondEmail { get; set; }
+        public string login { get; set; }
+        public string email { get; set; }
+    }
+
+    public class Provider
+    {
+        public string type { get; set; }
+        public string name { get; set; }
+    }
+
+    public class BaseResponse
+    {
+        public string id { get; set; }
+        public string status { get; set; }
+        public DateTime created { get; set; }
+        public DateTime activated { get; set; }
+        public DateTime statusChanged { get; set; }
+        public DateTime lastLogin { get; set; }
+        public DateTime lastUpdated { get; set; }
+        public DateTime passwordChanged { get; set; }
+        public Type type { get; set; }
+        public Profile profile { get; set; }
+        public Credentials credentials { get; set; }
+        public Links _links { get; set; }
+    }
+
+    public class Self
+    {
+        public string href { get; set; }
+    }
+
+    public class Type
+    {
+        public string id { get; set; }
+    }
+
+
+
+
+}

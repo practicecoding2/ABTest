@@ -1,0 +1,1837 @@
+using LoanPayoff.Models;
+using LoanPayoff.Service.Interfaces;
+using LoanPayoff.Web.Utilities;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Configuration;
+using Saml;
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Net;
+using System.Net.Sockets;
+using System.Security.Claims;
+using System.Text;
+using System.Threading.Tasks;
+using Okta.AspNetCore;
+
+namespace LoanPayoff.Web.Controllers
+{
+    public class LoginController : Controller
+    {
+        IRepository repos;
+        IConfiguration _iconfiguration;
+        RecordHelper _recordHelper;
+        //IRepository reposTkn;
+
+        public LoginController(IConfiguration iconfiguration, IRepository _repository, RecordHelper recordHelper)
+        {
+            _iconfiguration = iconfiguration;
+            repos = _repository;
+            _recordHelper = recordHelper;
+        }
+
+        public ActionResult Index()
+        {
+            return View();
+        }
+
+        public async Task<ActionResult> Login()
+        {
+            string userName = string.Empty;
+            var ssoLoginRequest = new SsoLoginRequest();
+            LoginInfo getUserInfoByEmail = new LoginInfo();
+            LoginDetail getUserInfoByUserId = new LoginDetail();
+            if (User.Claims.Any(x => x.Type == "UserName"))
+            {
+                //User.Claims.userin
+                userName = User.Claims.Where(x => x.Type == "UserName").FirstOrDefault().Value;
+                getUserInfoByEmail = await repos.GetLoginInfoByUserName(userName);
+                getUserInfoByUserId = repos.GetLoginDetailsByUserId(getUserInfoByEmail.UserId, true);
+
+
+                ssoLoginRequest.EmailAddress = User.Claims.Any(x => x.Type == "EmailAddress") ? User.Claims.Where(x => x.Type == "EmailAddress").FirstOrDefault().Value : "";
+                ssoLoginRequest.IdpId = User.Claims.Any(x => x.Type == "idp") ? User.Claims.Where(x => x.Type == "idp").FirstOrDefault().Value : "";
+                ssoLoginRequest.UserId = User.Claims.Any(x => x.Type == "UserId") ? User.Claims.Where(x => x.Type == "UserId").FirstOrDefault().Value : "";
+               // var res = SsoValidate(ssoLoginRequest);
+               // LoginDetail userInfo = CommonHelper.GetCurrentSessionfromClaims(User);
+                //if (res.Result.ToString() =="")
+                //{
+                //  return UserAuthenticated();
+                //}
+                return await SsoValidate(ssoLoginRequest);
+            }
+           // return UserAuthenticated();//
+            return await SsoValidate(ssoLoginRequest);
+        }
+
+        public ActionResult ProgressiveSSOTest()
+        {
+            return View();
+        }
+
+        public ActionResult LoginFailedSso()
+        {
+            return View("Login");
+        }
+
+        public static string GetIPAddress()
+        {
+            var host = Dns.GetHostEntry(Dns.GetHostName());
+            foreach (var ip in host.AddressList)
+            {
+                if (ip.AddressFamily == AddressFamily.InterNetwork)
+                {
+                    return ip.ToString();
+                }
+            }
+            throw new Exception("No network adapters with an IPv4 address in the system!");
+        }
+
+        [HttpPost]
+        [ValidateAntiForgeryToken]
+        public async Task<JsonResult> LpLoginValidate([FromBody] LoginParams loginParams)
+        {
+            short maxLockout = CommonConstants.DefaultMaxLockOutAttempt;
+            if (TempData != null)
+                TempData["SessionInfo"] = null;
+            string authenticated = CommonConstants.InvalidUserLoginMessage;
+            string ipAddressErrorMessage = string.Empty;
+            bool filterIP = false;
+            LoginDetail userInfo = new LoginDetail();
+            LoginDetail userInfoIPRangecheck = new LoginDetail();
+
+            // get user login information from the db to compare to input values
+            var validationValues = await repos.GetLoginInfoByUserName(loginParams.UserName);
+
+            //Begin getting the IP ADDRESS
+            //var userIpAddr = Convert.ToString(Request.ServerVariables["HTTP_X_FORWARDED_FOR"]) ??
+            //                 Convert.ToString(Request.ServerVariables["REMOTE_ADDR"]);
+
+            dynamic MPmatch = "";
+            string ipAddress = HttpContext.Connection.RemoteIpAddress.MapToIPv4().ToString();
+            string proxyIpAddress = HttpContext.Connection.RemoteIpAddress.MapToIPv4().ToString();
+            if (Request.Headers.ContainsKey("X-Forwarded-For"))
+            {
+                if (!string.IsNullOrEmpty(Request.Headers["X-Forwarded-For"].ToString()))
+                {
+                    ipAddress = Request.Headers["X-Forwarded-For"].ToString().Split(',')[0];
+                    proxyIpAddress = Request.Headers["X-Forwarded-For"].ToString();
+
+                }
+            }
+
+            //End getting the IP ADDRESS
+
+            if (validationValues != null && validationValues.UserMaxLockoutLimit > 0)
+            {
+                maxLockout = validationValues.UserMaxLockoutLimit;
+            }
+            //var encryptPassword = new Areas.LpAdmin.Controllers.WorkListController(_iconfiguration);
+
+            if (!string.IsNullOrEmpty(validationValues?.UserName))
+            {
+                var pw = loginParams.IsEncrypt ? loginParams.Password : EncryptPassWord(loginParams.Password + validationValues.Salt);
+                var environment = new SessionFilter().ConfigureEnvironment();
+                if (validationValues.IsDemoUser && environment.ToLower() == "prd")
+                {
+                    authenticated = CommonConstants.InvalidUserLoginMessage;
+                }
+                else if (validationValues.IsAdminLockout)
+                {
+                    authenticated = CommonConstants.UserAccountLockedOutMessage;
+                }
+                else if (!validationValues.IsActive && !validationValues.IsAdminLockout)
+                {
+                    if (validationValues.IsSuperAdmin || validationValues.IsAdministrator)
+                    {
+                        authenticated = CommonConstants.UserAccountInactiveMessage;
+                    }
+                    else if (validationValues.IsSupervisor)
+                    {
+                        authenticated = CommonConstants.SupervisorAccountInactiveMessage;
+                    }
+                    else
+                    {
+                        authenticated = CommonConstants.UserAccountInactiveMessage;
+                    }
+                }
+                else if (validationValues.Password == pw)
+                {
+                    authenticated = "";
+
+                    userInfo = repos.GetLoginDetailsByUserId(validationValues.UserId, true);
+                    userInfoIPRangecheck = repos.GetIPRangeCheckDetailsByUserId(validationValues.UserId, true, ipAddress); //Checking IPAddress exist in IPwhitelisting range
+
+                    if (userInfo != null && validationValues.IsActive && !validationValues.IsAdminLockout)
+                    {
+                        var userType = (!string.IsNullOrEmpty(userInfo.CarrierHeader) ? userInfo.CarrierHeader :
+                                        (!string.IsNullOrEmpty(userInfo.LenderHeader) ? userInfo.LenderHeader : (
+                                        !string.IsNullOrEmpty(userInfo.DealerHeader) ? userInfo.DealerHeader : string.Empty
+                                        ))).Trim();
+                        //check if the request is coming from authorized IP address
+                        if (!userInfo.IsSuperadmin && (userInfo.WhitelistedIPAddresses != null || userInfoIPRangecheck.IPAddressRangeExist != null)
+                            && (userInfo.WhitelistedIPAddresses.Count > 0))
+                        {
+                            List<AppParameters> appParms = repos.GetAppParameters("IPFiltering", "");
+
+                            if (appParms != null && appParms.Count > 0)
+                            {
+                                filterIP = appParms.Where(a => a.ParamterName == "Active Status").Select(m => m.ParamterValue).FirstOrDefault() == "1";
+                            }
+
+                            if (!string.IsNullOrEmpty(ipAddress)
+                                && ipAddress != "0.0.0.1" //added to allow local debugging
+                                && filterIP)
+                            {
+                                if (ipAddress.Contains(':'))
+                                {
+                                    var address = ipAddress.Trim().Split(':');
+                                    ipAddress = address[0].Trim();
+                                }
+
+                                var matchedIPs = userInfo.WhitelistedIPAddresses.Where(ip => ip == ipAddress).ToList();
+                                MPmatch = Convert.ToString(matchedIPs.Count);
+                                if (matchedIPs.Count == 0 && (userInfoIPRangecheck.IPAddressRangeExist != null && (userInfoIPRangecheck.IPAddressRangeExist.IsIPRangeExists == false || userInfoIPRangecheck.IPAddressRangeExist.IsIPRangeExists == null)))//not matching valid IP entries
+                                {
+                                    ipAddressErrorMessage = string.Format(CommonConstants.IPAddressInvalidMessage
+                                        , userType);
+                                }
+                            }
+                        }
+                        //This case exist when range exist and indivisual ip does not exist
+                        if (userInfo.WhitelistedIPAddresses.Count == 0 && MPmatch == "" && userInfoIPRangecheck.IPAddressRangeExist != null && userInfoIPRangecheck.IPAddressRangeExist.IsIPRangeExists == false)
+                        {
+                            MPmatch = "0";
+                        }
+                        if (!userInfo.IsSuperadmin &&
+                              (userInfoIPRangecheck.IPAddressRangeExist != null && userInfoIPRangecheck.IPAddressRangeExist.IsIPRangeExists != null && userInfoIPRangecheck.IPAddressRangeExist.IsIPRangeExists == false && (MPmatch == "0")))
+                        {
+
+                            List<AppParameters> appParms = repos.GetAppParameters("IPFiltering", "");
+
+                            if (appParms != null && appParms.Count > 0)
+                            {
+                                filterIP = appParms.Where(a => a.ParamterName == "Active Status").Select(m => m.ParamterValue).FirstOrDefault() == "1";
+                            }
+
+                            if (!string.IsNullOrEmpty(ipAddress)
+                                && ipAddress != "0.0.0.1" //added to allow local debugging
+                                && filterIP)
+                            {
+                                if (ipAddress.Contains(':'))
+                                {
+                                    var address = ipAddress.Trim().Split(':');
+                                    ipAddress = address[0].Trim();
+                                }
+
+
+
+                                if (userInfoIPRangecheck.IPAddressRangeExist != null && userInfoIPRangecheck.IPAddressRangeExist.IsIPRangeExists == false)
+                                {
+                                    ipAddressErrorMessage = string.Format(CommonConstants.IPAddressInvalidMessage
+                                        , userType);
+
+                                }
+
+                            }
+
+                        }
+
+
+                        if (string.IsNullOrEmpty(ipAddressErrorMessage))
+                        {
+                            if (validationValues.SSOLogging)
+                            {
+                                authenticated = CommonConstants.SSOInactiveMessage;
+                            }
+                            if (string.IsNullOrEmpty(authenticated))
+                            {
+                                //CREATE A USER SESSION
+                                userInfo.CurrentSession = await repos.CreateSession(validationValues.UserId, ipAddress, proxyIpAddress);
+                                //END CREATING THE USER SESSION
+
+                                // we need to do something with session here, but we need to see what...
+                                userInfo.Name = Convert.ToString(userInfo.FirstName) + " " + Convert.ToString(userInfo.LastName);
+                                ////userInfo.Token = tokenString;
+                                userInfo.Version = _iconfiguration["Version:Number"];
+                                //userInfo.MaxTimeOut = 120;
+                                userInfo.CurrentSession.LastActionTime = DateTime.UtcNow;
+                                userInfo.CurrentSession.ShowNewCarrierDesign = ShowNewCarrierDesign();
+                                TempData.Put("SessionInfo", userInfo.CurrentSession);
+                                TempData.Keep();
+                            }
+                        }
+                        else
+                        {
+                            authenticated = ipAddressErrorMessage;
+                        }
+                    }
+                }
+                else if (validationValues.LoginAttemptCount == (maxLockout - 1))
+                {
+                    authenticated = CommonConstants.UserAccountLockoutWarning;
+                }
+                else if (validationValues.LoginAttemptCount > (maxLockout - 1) || !validationValues.IsActive)
+                {
+                    if (repos.LockoutUserAccount(validationValues.UserName, maxLockout))//is a lockout
+                    {
+                        authenticated = CommonConstants.UserAccountLockingMessage;
+                    }
+                    else
+                    {
+                        if (validationValues.IsSuperAdmin || validationValues.IsAdministrator)
+                        {
+                            authenticated = CommonConstants.UserAccountInactiveMessage;
+                        }
+                        else if (validationValues.IsSupervisor)
+                        {
+                            authenticated = CommonConstants.SupervisorAccountInactiveMessage;
+                        }
+                        else
+                        {
+                            authenticated = CommonConstants.UserAccountInactiveMessage;
+                        }
+                    }
+
+                }
+                else
+                {
+                    authenticated = CommonConstants.InvalidUserLoginMessage;
+                }
+            }
+
+            // keeping the below lines of code in case we have to do some logging of login things
+            //if (Request != null && Request.Method == "POST" && Request.Form != null)
+            //{
+            //    //var tokenString = Request.Form["token"].ToString();
+            //    //repos.LogError(new ProcessErrorLog
+            //    //{
+            //    //    ExceptionMessage = "Login info input paras: Request token: " + tokenString,
+            //    //    InnerExceptionMessage = null,
+            //    //    StackTrace = "",
+            //    //    MethodName = "Login/LPLoginMain",
+            //    //    ComputerName = Dns.GetHostName()
+            //    //});
+            //}
+            //else
+            //{
+            //    repos.LogError(new ProcessErrorLog
+            //    {
+            //        ExceptionMessage = "Login info input params: Request is invalid-" + Request != null ? Request.ToString() : null,
+            //        InnerExceptionMessage = null,
+            //        StackTrace = "",
+            //        MethodName = "Login/LPLoginMain",
+            //        ComputerName = Dns.GetHostName()
+            //    });
+            //}
+
+            // failed login attempt log
+            if (!string.IsNullOrEmpty(authenticated))
+                repos.LogFailedLoginAttempt(validationValues.UserId, ipAddress);
+
+            return Json(authenticated);
+        }
+
+        public ActionResult UserAuthenticated()
+        {
+            try
+            {
+                LoginDetail loginDetail = CommonHelper.GetCurrentSessionfromClaims(User);
+                SessionDetail sessionInfo = loginDetail.CurrentSession;
+                //var CarrierId = User.Claims.Any(x => x.Type == "EmailAddress") ? User.Claims.Where(x => x.Type == "EmailAddress").FirstOrDefault().Value : "";
+
+                var currentPOIdGuideWireSSO = TempData.Peek<string>("CurrentPOIdGuideWireSSO");
+                if (sessionInfo == null)
+                {
+                    return RedirectToAction("Login", "Login");
+                }
+                else
+                {
+                    if (sessionInfo.CarrierId != 0)
+                    {
+                        TempData.Put("SessionInfo", sessionInfo);
+                        TempData.Keep();
+                        if (!string.IsNullOrWhiteSpace(currentPOIdGuideWireSSO))
+                        {
+                            TempData.Put("CurrentPOIdGuideWireSSO", currentPOIdGuideWireSSO);
+                            TempData.Keep();
+
+                            return RedirectToAction("ViewEditDetails", "PayoffRequest", new { area = nameof(Areas.Carrier) });
+                        }
+                        else
+                            return RedirectToAction("Index", "Dashboard", new { area = "Carrier" });
+                    }
+                    else if (sessionInfo.DealerId != 0)
+                    {
+                        return RedirectToAction("Index", "Dashboard", new { area = "Dealer" });
+                    }
+                    else if (sessionInfo.LenderId != 0)
+                    {
+                        if (!string.IsNullOrWhiteSpace(currentPOIdGuideWireSSO))
+                        {
+                            //POST to PODetails page
+                            TempData.Put("CurrentPOIdGuideWireSSO", currentPOIdGuideWireSSO);
+                            TempData.Keep();
+
+                            return RedirectToAction("RecordDetails", "Records", new { area = "Lender" });
+                        }
+                        else
+                            return RedirectToAction("Index", "Dashboard", new { area = "Lender" });
+                    }
+                    else if (sessionInfo.IsDemoUser)
+                    {
+                        return RedirectToAction("Index", "Demo", new { area = "LpAdmin" });
+                    }
+                    else
+                    {
+                        return RedirectToAction("Dashboard", "System", new { area = "LpAdmin" });
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                repos.LogError(new ProcessErrorLog
+                {
+                    ExceptionMessage = "User authentication catch error: " + ex.Message,
+                    InnerExceptionMessage = ex.InnerException != null ? ex.InnerException.ToString() : string.Empty,
+                    StackTrace = ex.StackTrace,
+                    MethodName = "Login/UserAuthenticated",
+                    ComputerName = Dns.GetHostName()
+                });
+                return RedirectToAction("Login", "Login");
+            }
+        }
+
+        public IActionResult LpLogout()
+        {
+            return new SignOutResult(
+       new[]
+       {
+               OpenIdConnectDefaults.AuthenticationScheme,
+                OktaDefaults.MvcAuthenticationScheme,
+                CookieAuthenticationDefaults.AuthenticationScheme,
+        },
+       new AuthenticationProperties { RedirectUri = "/Login/Login" });
+
+
+        }
+
+        public ActionResult LpLogoutNew()
+        {
+            var sessionInfo = TempData.Get<SessionDetail>("SessionInfo");
+            //if (!string.IsNullOrEmpty(userInfo.Token))
+            //{
+            //    ////IRepository repos = new Repository(_connectionString);
+            //    repos.DeleteSessionfromDB(userInfo.Token);
+            //}
+            if (TempData != null)
+            {
+                TempData["SessionInfo"] = null;
+
+                TempData["CurrentPOIdGuideWireSSO"] = null;
+            }
+            return RedirectToAction("Login", "Login");
+        }
+
+        public ActionResult ForgotPassword()
+        {
+            ViewBag.ReCaptchaKey = _iconfiguration["ReCaptcha:SiteKey"];
+            ViewBag.CurrentUser = new LoginDetail();
+            return View();
+        }
+
+        [HttpPost]
+        [ValidateAntiForgeryToken]
+        public async Task<JsonResult> ForgotPasswordValidate([FromBody] LoginParams loginParams)
+        {
+            var result = await ResendForgotPasswordEmail(loginParams);
+            return result;
+        }
+
+        [HttpPost]
+        public async Task<JsonResult> ResendForgotPasswordEmail([FromBody] LoginParams loginParams)
+        {
+            ////IRepository repos = new Repository(_connectionString);
+            var userName = string.Empty;
+            var message = string.Empty;
+            var messagetype = string.Empty;
+            //Set userName value to check against in DB
+            if (!string.IsNullOrEmpty(loginParams.UserName))
+            {
+                userName = loginParams.UserName.Trim();
+            }
+            else if (!string.IsNullOrEmpty(loginParams.Email))
+            {
+                userName = loginParams.Email.Trim();
+            }
+            var Emailid = userName;
+            //Check if user exists
+            var user = await repos.GetUserResetInfo(Emailid);
+            if (user != null)
+            {
+                if (user.IsAdminLockout == false && user.IsActive == false)
+                {
+                    message = "Your account is not active.  Please contact your Loan Payoff Administrator to activate your account";
+                    messagetype = "Error";
+                }
+                else
+                {
+                    //User exists, send email to reset password
+                    bool emailSent;
+                    if (loginParams.Password == "CreatePassword")
+                    {
+                        new UserHelper(repos).SendUserEmail(user);
+                        emailSent = true;
+                        message = emailSent
+                                    ? "An email has been sent to you with instructions. Please check your email."
+                                    : "";
+                    }
+                    else
+                    {
+                        emailSent = SendPasswordResetEmail(user);
+                        message = emailSent
+                            ? "An email has been sent to you with instructions on how to reset your password. Please check your email."//"An email has been sent to you with instructions for changing your password."
+                            : "";
+                    }
+                    messagetype = "Sucess";
+                }
+            }
+            else
+            {
+                //User does not exist, return page and show message
+                message = "Sorry - I couldnt find your email address";// "The username / email address you entered could not be found.";
+                messagetype = "Email";
+            }
+            var result = new { msg = message, msgtype = messagetype };
+            return Json(result);
+        }
+
+        public string EncryptPassWord(string textToEncrypt)
+        {
+            var crypt = new System.Security.Cryptography.SHA256Managed();
+            var hash2 = new System.Text.StringBuilder();
+            byte[] crypto = crypt.ComputeHash(System.Text.Encoding.UTF8.GetBytes(textToEncrypt));
+            foreach (byte theByte in crypto)
+            {
+                hash2.Append(theByte.ToString("x2"));
+            }
+            var password = hash2.ToString();
+            return password;
+        }
+
+
+        private bool SendPasswordResetEmail(UserDetail user)
+        {
+            //IRepository repos = new Repository(_connectionString, _iconfiguration);
+            var emailSent = false;
+
+            try
+            {
+                //Set email info
+                var message =
+                    "<html><body style=\"width: 90vw; margin: 0px auto; font - family: sans - serif; padding - top:30px; \">\r\n" +
+                        "Dear {0}, <br/><br/>" +
+                        "To initiate the password reset process for your {1}, click the link below.<br/><br/> " +
+                        "<a href=\"" + "{2}" + "\">Reset Password</a> <br/><br/>" +
+                        "This link will expire after 24 hours. You can still click on the link to generate a new email.<br/><br/>" +
+                        "If clicking the link above does not work, please copy and paste the URL in a new browser window instead." +
+                        "You have either received this email as a result of a new account being created for you, or as a result of requesting a password reset for your account. " +
+                        "If you believe you have received this email in error, or if you have questions, please contact IAA Loan Payoff at IAALoanPayoff@iaai.com or 800-217-8975. <br/><br/>" +
+                        "Thank you, <br/><br/>" +
+                        "IAA Loan Payoff <br/>" +
+                        "{3}" + "\r\n" +
+                    "</body></html>";
+
+                //var message = @"<html><head><title></title><meta name=""viewport"" content=""width=device-width initial-scale=1.0"" /></head>" +
+                //        @"<style>body,html{height:100%}html{font-family:sans-serif;-webkit-text-size-adjust:100%;-ms-text-size-adjust:100%;-webkit-tap-highlight-color:transparent;font-size:62.5%;box-sizing:border-box}" +
+                //        @"body{margin:0;line-height:1.5;background-color:#ddd;font-size:1.4rem;font-weight:400;color:#434343;-webkit-font-smoothing:antialiased;font-family:Roboto,arial,sans-serif}body,html{height:100%}*,:after,:before{box-sizing:border-box}" +
+                //        @".wrapper{display:flex;flex-direction:column;height:100%;padding:5rem 0 0}.wrapper-inner{overflow:auto;height:100%;flex:inherit;padding:2rem;position:relative}.container-sm{max-width:70rem}" +
+                //        @".tile{background-color:#fff;margin:1.5rem;border-top:3px solid #c90107;box-shadow:0 0 1rem rgb(0 0 0 / 10%)}.tile-body,.tile-footer,.tile-header{padding:1.5rem}img{vertical-align:middle}img{border:0}</style>" +
+                //        @"<body><div class=""wrapper""><div class=""wrapper-inner""> <main class=""container-sm"" style=""margin: 0px auto""><div class=""tile""><div class=""tile-body"" style=""padding: 1.5rem;""> <br/> <br/>";
+                //       // + @"<img src=""./IAA_Symbol.svg"" style=""width: 70px""> ";
+
+                var userFullName = user.FirstName + " " + user.LastName;
+                var userInfoText = string.Empty;
+                if (!string.IsNullOrEmpty(user.Name))
+                {
+                    userInfoText = string.Format("IAA Loan Payoff account associated with \"{0}\" (username: {1})", user.Name, user.Email);
+                }
+                else
+                {
+                    userInfoText = string.Format("(username: {0})", user.Email);
+                }
+
+                var environment = new SessionFilter().ConfigureEnvironment();
+                var lpUrl = environment.ToLower() != "prd"
+                    ? "https://" + environment.ToLower() + "-loanpayoff.iaai.com/"
+                    : "https://loanpayoff.iaai.com/";
+                //lpUrl = "http://localhost:10957/";
+                var resetUrl = string.Empty;
+
+                // todo: handle blank password
+                if (string.IsNullOrEmpty(user.Password))
+                {
+                    user.Password = EncryptPassWord(user.Email);
+                    repos.UpdateUserPassword(user.PersonId, user.Password);
+                }
+
+                var passwordToken = new UserHelper(repos).GeneratePasswordResetToken(user.Password);
+                resetUrl = string.Format("{0}Login/CreatePassword?encryptedId={1}", lpUrl, passwordToken);
+                message = string.Format(message, userFullName, userInfoText, resetUrl, lpUrl);
+
+                //message = message + 
+                //        //$"<body style=\"width: 90vw; margin: 0px auto; font-family:sans-serif; padding-top:30px; \">\r\n" +
+                //        $"Dear {userFullName}, <br/><br/>" +
+                //        $"To initiate the password reset process for your {userInfoText}, click the link below.<br/><br/>" +
+                //        $"This link will expire after 24 hours. You can still click on the link to generate a new email.<br/><br/>" +
+                //        $"<a href=\" + {resetUrl} + \">Reset Password</a> <br/><br/>" +
+                //        "If clicking the link above does not work, please copy and paste the URL in a new browser window instead." +
+                //        "You have either received this email as a result of a new account being created for you, or as a result of requesting a password reset for your account. " +
+                //        "If you believe you have received this email in error, or if you have questions, please contact IAA Loan Payoff at IAALoanPayoff@iaai.com or 800-217-8975. <br/><br/>" +
+                //        "Thank you, <br/><br/>" +
+                //        "IAA Loan Payoff <br/>" +
+                //        $"{lpUrl}" + "\r\n"
+                //        + "</div></div></main></div></div></body></html>";
+
+
+                //Set final email object and call API
+                var email = new Email
+                {
+                    ToEmail = user.Email,
+                    FromEmail = _iconfiguration["SystemAdmin:EmailId"],
+                    Subject = "IAA Loan Payoff password Reset Email",
+                    Message = message
+                };
+                emailSent = repos.SendEmail(email);
+            }
+            catch (Exception ex)
+            {
+                repos.LogError(new ProcessErrorLog
+                {
+                    ExceptionMessage = ex.Message,
+                    InnerExceptionMessage = (ex.InnerException?.Message),
+                    StackTrace = ex.StackTrace,
+                    MethodName = "LoginController.SendPasswordResetEmail",
+                    ComputerName = Dns.GetHostName()
+                });
+            }
+            return emailSent;
+        }
+
+        public async Task<IActionResult> CreatePassword(string encryptedId = "")
+        {
+            if (!string.IsNullOrWhiteSpace(encryptedId))
+            {
+                var encryptedToken = await Task.Run(() => ValidatePasswordResetToken(encryptedId));
+                var userInfo = await repos.CreatePasswordUserInfo(encryptedToken.Password);
+
+                if (encryptedToken.IsValid && userInfo.PersonId > 0)
+                {
+                    return View("CreatePassword", userInfo);
+                }
+                else
+                {
+                    if (!encryptedToken.IsValid && userInfo.PersonId > 0)
+                    {
+                        userInfo.Password = encryptedToken.Purpose;// just to distinguish b/w new & existing user
+                        return View("RegenerateEmail", userInfo);
+                    }
+                    else
+                        return RedirectToAction("Login", "Login");
+                }
+            }
+            else
+            {
+                return RedirectToAction("Login", "Login");
+            }
+        }
+
+        public async Task<JsonResult> RegeneratePasswordEmail([FromBody] LoginParams loginParams)
+        {
+            var result = await ResendForgotPasswordEmail(loginParams);
+            return result;
+        }
+
+        #region ResetPassword - LinkExpiration
+
+        private ValidatePasswordResult ValidatePasswordResetToken(string token, string purpose = "")
+        {
+            var response = new ValidatePasswordResult()
+            {
+                IsValid = false
+            };
+
+            try
+            {
+                string incoming = token.Replace('_', '/').Replace('-', '+');
+                switch (token.Length % 4)
+                {
+                    case 2: incoming += "=="; break;
+                    case 3: incoming += "="; break;
+                }
+                var bytes = Convert.FromBase64String(incoming);
+
+                //var unprotectedData = _idataProtector.Unprotect(bytes);
+                var unprotectedData = bytes;
+
+                var ms = new MemoryStream(unprotectedData);
+                using (var reader = new StreamReader(ms, Encoding.UTF8))
+                {
+                    var userPassword = reader.ReadLine();
+                    if (!string.IsNullOrEmpty(userPassword))
+                    {
+                        response.IsValid = true;
+                        response.Password = userPassword;
+                    }
+
+                    var creationTime = reader.ReadLine();
+                    DateTimeOffset dateTimeResult;
+                    DateTimeOffset.TryParse(creationTime, out dateTimeResult);
+                    var expirationTime = dateTimeResult + TimeSpan.FromDays(1);
+                    if (expirationTime < DateTimeOffset.UtcNow)
+                    {
+                        response.IsValid = false;
+                    }
+
+                    var purp = reader.ReadLine();
+                    if (!string.IsNullOrEmpty(purp))//(!string.Equals(purp, purpose ?? "ResetPassword"))
+                    {
+                        response.Purpose = purp;
+                    }
+
+                    if (reader.Peek() != -1)
+                    {
+                        response.IsValid = false;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                repos.LogError(new ProcessErrorLog
+                {
+                    ExceptionMessage = ex.Message,
+                    InnerExceptionMessage = ex.InnerException != null ? ex.InnerException.ToString() : string.Empty,
+                    StackTrace = ex.StackTrace,
+                    MethodName = "Login/ValidatePasswordResetToken",
+                    ComputerName = Dns.GetHostName()
+                });
+            }
+            return response;
+        }
+
+        #endregion ResetPassword - LinkExpiration
+
+        public async Task<JsonResult> SavePassword([FromBody] CreatePasswordUserInfo createPasswordUserInfo)
+        {
+            var salt = "";
+            var personId = createPasswordUserInfo.PersonId;
+            // ViewBag.ApplicationID = 
+            ////IRepository repos = new Repository(_connectionString);
+
+            //check with last 5 paswwords
+            var last5PasswordsList = await repos.GetUserLastFivePasswords(createPasswordUserInfo.UserName);
+
+            var isPasswordSameAsLastFive = CheckIfPasswordSameWithLastFive(createPasswordUserInfo.Password, last5PasswordsList);
+
+            if (isPasswordSameAsLastFive)
+            {
+                return Json(false);
+            }
+
+            //var encryptPassword = new Areas.LpAdmin.Controllers.WorkListController(_iconfiguration);
+            salt = EncryptPassWord(TimeInSeconds().ToString()).Substring(0, 10);
+            var newPassword = EncryptPassWord(createPasswordUserInfo.Password + salt);
+
+            if (personId > 0)
+            {
+                var userInfo = await repos.SavePassword(personId, salt, newPassword);
+                return Json(true);
+            }
+            return Json(false);
+        }
+
+        private bool CheckIfPasswordSameWithLastFive(string currentPassword, List<UserPassword> userPasswordList)
+        {
+            var result = false;
+            //var encryptPassword = new Areas.LpAdmin.Controllers.WorkListController(_iconfiguration);
+            foreach (UserPassword u in userPasswordList)
+            {
+                if (u.Password == EncryptPassWord(currentPassword + u.Salt))
+                {
+                    result = true;
+                }
+            }
+            return result;
+        }
+
+        public int TimeInSeconds()
+        {
+            long initialTicks = new System.DateTime(1970, 1, 1, 0, 0, 0, 0).Ticks;
+            long todayTicks = System.DateTime.UtcNow.Ticks;
+            int elapsedSeconds = System.Convert.ToInt32((todayTicks - initialTicks) / 10000000);
+            return elapsedSeconds;
+        }
+
+        public async void PayOffDetails(int poId, bool isCarrier = true)
+        {
+            IdentityProvider identityProvider = new IdentityProvider();
+            GuideWireSSOInput guideWireSSOInput = new GuideWireSSOInput();
+            guideWireSSOInput.POId = poId;
+            guideWireSSOInput.IsTestOnly = 0;
+            guideWireSSOInput.IsCarrier = isCarrier;
+            var result = await repos.GetGuideWireSsoIdentityProviderCarrierDetails(guideWireSSOInput);
+
+            TempData.Put("CurrentPOIdGuideWireSSO", poId.ToString());
+            TempData.Keep();
+
+            try
+            {
+
+                identityProvider = result.ToList<IdentityProvider>().FirstOrDefault();
+
+                var carrierId = identityProvider != null ? identityProvider.CarrierId : 0;
+                var lenderId = identityProvider != null ? identityProvider.LenderId : 0;
+
+                if (carrierId > 0 && isCarrier)
+                {
+                    switch (carrierId)
+                    {
+                        case 7:
+                            ProgressiveTest();
+                            break;
+                        default:
+                            Response.Redirect(_iconfiguration["Session:BaseSiteUrl"] + "/Login/Login");
+                            break;
+                    }
+                }
+
+                if (lenderId > 0 && !isCarrier)
+                {
+                    switch (lenderId)
+                    {
+                        case 23:
+                            MNTBank();
+                            break;
+                        case 1291:
+                            GMFinancials();
+                            break;
+                        case 5446:
+                            CreditAcceptance();
+                            break;
+                        default:
+                            Response.Redirect(_iconfiguration["Session:BaseSiteUrl"] + "/Login/Login");
+                            break;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                //Add error log                
+                repos.LogError(new ProcessErrorLog
+                {
+                    ExceptionMessage = "Error while getting  SSO details form the database, Message: " + ex.Message,
+                    InnerExceptionMessage = ex.InnerException != null ? ex.InnerException.ToString() : string.Empty,
+                    StackTrace = ex.StackTrace,
+                    MethodName = nameof(Controllers.LoginController) + "/" + nameof(PayOffDetails),
+                    ComputerName = Dns.GetHostName()
+                });
+
+                Response.Redirect(_iconfiguration["Session:BaseSiteUrl"] + "/Login/Login");
+            }
+            Response.Redirect(_iconfiguration["Session:BaseSiteUrl"] + "/Login/Login");
+        }
+        public async void PayOffDetailsTest(int poId, bool isCarrier = true)
+        {
+            IdentityProvider identityProvider = new IdentityProvider();
+            GuideWireSSOInput guideWireSSOInput = new GuideWireSSOInput();
+            guideWireSSOInput.POId = poId;
+            guideWireSSOInput.IsTestOnly = 1;
+            guideWireSSOInput.IsCarrier = isCarrier;
+            var result = await repos.GetGuideWireSsoIdentityProviderCarrierDetails(guideWireSSOInput);
+
+            TempData.Put("CurrentPOIdGuideWireSSO", poId.ToString());
+            TempData.Keep();
+
+            try
+            {
+                identityProvider = result.ToList<IdentityProvider>().FirstOrDefault();
+
+                var carrierId = identityProvider != null ? identityProvider.CarrierId : 0;
+                var lenderId = identityProvider != null ? identityProvider.LenderId : 0;
+
+                if (carrierId > 0 && isCarrier)
+                {
+                    switch (carrierId)
+                    {
+                        case 7:
+                            ProgressiveTest();
+                            break;
+                        case 291:
+                            GuideWireGroup();
+                            break;
+                        default:
+                            Response.Redirect(_iconfiguration["Session:BaseSiteUrl"] + "/Login/Login");
+                            break;
+                    }
+                }
+
+                if (lenderId > 0 && !isCarrier)
+                {
+                    switch (lenderId)
+                    {
+                        case 23:
+                            GuideWireMNTBank();
+                            break;
+                        case 1291:
+                            GuideWireGMFinancials();
+                            break;
+                        case 5446:
+                            GuideWireCreditAcceptance();
+                            break;
+                        default:
+                            Response.Redirect(_iconfiguration["Session:BaseSiteUrl"] + "/Login/Login");
+                            break;
+                    }
+                }
+
+            }
+            catch (Exception ex)
+            {
+                //Add error log                
+                repos.LogError(new ProcessErrorLog
+                {
+                    ExceptionMessage = "Error while getting  SSO details form the database, Message: " + ex.Message,
+                    InnerExceptionMessage = ex.InnerException != null ? ex.InnerException.ToString() : string.Empty,
+                    StackTrace = ex.StackTrace,
+                    MethodName = nameof(Controllers.LoginController) + "/" + nameof(PayOffDetailsTest),
+                    ComputerName = Dns.GetHostName()
+                });
+
+                Response.Redirect(_iconfiguration["Session:BaseSiteUrl"] + "/Login/Login");
+            }
+        }
+        public void ProgressiveTest()
+        {
+            bool useOktaSsoForProgressive = false;
+            List<AppParameters> appParms = repos.GetAppParameters("SingleSignOn", "SwitchProgressiveToOkta");
+            if (appParms != null && appParms.Count > 0)
+            {
+                useOktaSsoForProgressive = appParms.Where(a => a.ParamterName == "SwitchProgressiveToOkta").Select(m => m.ParamterValue).FirstOrDefault() == "1";
+            }
+            if (useOktaSsoForProgressive)
+            {
+                //_ = SsoSignIn();
+                var url = _iconfiguration["Session:BaseSiteUrl"] + "Login/SsoSignIn?CarrierId=7&istestonly=1";
+                url = url.Replace("https://dev-loanpayoff.iaai.com/", "http://localhost:10957/");
+                Response.Redirect(url);
+            }
+            else
+            {
+                //NOTE: Re-work below URL for environment based client url
+                var samlEndpoint = _iconfiguration["SsoLogin:samlEndpoint"];  //  "https://dev-pgrlogin.progressive.com/adfs/ls/";
+
+                //var samlEndpoint = "https://irm-ad.az.local/adfs/ls/";
+
+                var request = new AuthRequest(
+                        _iconfiguration["SsoLogin:samlResponseReceivingAppUniqueId"],       //"https://qas-loanpayoff.iaai.com", //put your app's "unique ID" here
+                        _iconfiguration["SsoLogin:samlResponseReceivingAppActionMethod"]        //"https://qas-loanpayoff.iaai.com/Login/ProgressiveResponse" //assertion Consumer Url - the redirect URL where the provider will send authenticated users
+                        );
+
+                //generate the provider URL
+                string url = request.GetRedirectUrl(samlEndpoint);
+                Response.Redirect(url);
+            }
+        }
+
+        public void Progressive()
+        {
+            bool useOktaSsoForProgressive = false;
+            List<AppParameters> appParms = repos.GetAppParameters("SingleSignOn", "SwitchProgressiveToOkta");
+            if (appParms != null && appParms.Count > 0)
+            {
+                useOktaSsoForProgressive = appParms.Where(a => a.ParamterName == "SwitchProgressiveToOkta").Select(m => m.ParamterValue).FirstOrDefault() == "1";
+            }
+            if (useOktaSsoForProgressive)
+            {
+                //_ = SsoSignIn();
+                var url = _iconfiguration["Session:BaseSiteUrl"] + "Login/SsoSignIn?CarrierId=7&istestonly=0";
+                url = url.Replace("https://dev-loanpayoff.iaai.com/", "http://localhost:10957/");
+                Response.Redirect(url);
+            }
+            else
+            {
+                //NOTE: Re-work below URL for environment based client url
+                var samlEndpoint = _iconfiguration["SsoLogin:samlEndpoint"];  //  "https://dev-pgrlogin.progressive.com/adfs/ls/";
+
+                //var samlEndpoint = "https://irm-ad.az.local/adfs/ls/";
+
+                var request = new AuthRequest(
+                        _iconfiguration["SsoLogin:samlResponseReceivingAppUniqueId"],       //"https://qas-loanpayoff.iaai.com", //put your app's "unique ID" here
+                        _iconfiguration["SsoLogin:samlResponseReceivingAppActionMethod"]        //"https://qas-loanpayoff.iaai.com/Login/ProgressiveResponse" //assertion Consumer Url - the redirect URL where the provider will send authenticated users
+                        );
+
+                //generate the provider URL
+                string url = request.GetRedirectUrl(samlEndpoint);
+                Response.Redirect(url);
+            }
+        }
+
+        public void MNTBank()
+        {
+            var currentPOIdGuideWireSSO = TempData.Peek<string>("CurrentPOIdGuideWireSSO");
+            TempData.Put("CurrentPOIdGuideWireSSO", currentPOIdGuideWireSSO);
+            TempData.Keep();
+
+            var url = _iconfiguration["Session:BaseSiteUrl"] + "Login/SsoSignIn?LenderId=23&istestonly=0";
+            //url = url.Replace("https://dev-loanpayoff.iaai.com/", "http://localhost:10957/");
+            Response.Redirect(url);
+        }
+
+        public void GMFinancials()
+        {
+            var currentPOIdGuideWireSSO = TempData.Peek<string>("CurrentPOIdGuideWireSSO");
+            TempData.Put("CurrentPOIdGuideWireSSO", currentPOIdGuideWireSSO);
+            TempData.Keep();
+
+            var url = _iconfiguration["Session:BaseSiteUrl"] + "Login/SsoSignIn?LenderId=1291&istestonly=0";
+            //url = url.Replace("https://dev-loanpayoff.iaai.com/", "http://localhost:10957/");
+            Response.Redirect(url);
+        }
+
+        public void CreditAcceptance()
+        {
+            var currentPOIdGuideWireSSO = TempData.Peek<string>("CurrentPOIdGuideWireSSO");
+            TempData.Put("CurrentPOIdGuideWireSSO", currentPOIdGuideWireSSO);
+            TempData.Keep();
+
+            var url = _iconfiguration["Session:BaseSiteUrl"] + "Login/SsoSignIn?LenderId=2347&istestonly=0";
+            Response.Redirect(url);
+        }
+        public void GuideWireGroup()
+        {
+            var currentPOIdGuideWireSSO = TempData.Peek<string>("CurrentPOIdGuideWireSSO");
+            TempData.Put("CurrentPOIdGuideWireSSO", currentPOIdGuideWireSSO);
+            TempData.Keep();
+            var url = _iconfiguration["Session:BaseSiteUrl"] + "Login/SsoSignIn?CarrierId=291&istestonly=1";
+            //url = url.Replace("https://qas-loanpayoff.iaai.com/", "http://localhost:10957/");
+            Response.Redirect(url);
+        }
+
+        public void GuideWireMNTBank()
+        {
+            var currentPOIdGuideWireSSO = TempData.Peek<string>("CurrentPOIdGuideWireSSO");
+            TempData.Put("CurrentPOIdGuideWireSSO", currentPOIdGuideWireSSO);
+            TempData.Keep();
+            var url = _iconfiguration["Session:BaseSiteUrl"] + "Login/SsoSignIn?LenderId=23&istestonly=1";
+            //url = url.Replace("https://qas-loanpayoff.iaai.com/", "http://localhost:10957/");
+            Response.Redirect(url);
+        }
+
+        public void GuideWireGMFinancials()
+        {
+            var currentPOIdGuideWireSSO = TempData.Peek<string>("CurrentPOIdGuideWireSSO");
+            TempData.Put("CurrentPOIdGuideWireSSO", currentPOIdGuideWireSSO);
+            TempData.Keep();
+            var url = _iconfiguration["Session:BaseSiteUrl"] + "Login/SsoSignIn?LenderId=1291&istestonly=1";
+            //url = url.Replace("https://dev-loanpayoff.iaai.com/", "http://localhost:10957/");
+            Response.Redirect(url);
+        }
+
+        public void GuideWireCreditAcceptance()
+        {
+            var currentPOIdGuideWireSSO = TempData.Peek<string>("CurrentPOIdGuideWireSSO");
+            TempData.Put("CurrentPOIdGuideWireSSO", currentPOIdGuideWireSSO);
+            TempData.Keep();
+            var url = _iconfiguration["Session:BaseSiteUrl"] + "Login/SsoSignIn?IdpName=GuideWireCreditAcceptance-SAML2-LP-QAS&istestonly=1";
+            Response.Redirect(url);
+        }
+
+
+        public async Task<IActionResult> ProgressiveResponse()
+        {
+            ////IRepository repos = new Repository(_connectionString);
+            try
+            {
+                //specify the certificate that your SAML provider has given to you
+                //                string samlCertificate =
+                //@"MIIC2jCCAcKgAwIBAgIQTizHppQViINLAM/y6HF7oDANBgkqhkiG9w0BAQsFADApMScwJQYDVQQDEx5BREZTIFNpZ25pbmcgLSBJUk0tQUQuYXoubG9jYWwwHhcNMTgwOTA1MjAyMzM2WhcNMTkwOTA1MjAyMzM2WjApMScwJQYDVQQDEx5BREZTIFNpZ25pbmcgLSBJUk0tQUQuYXoubG9jYWwwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQDJwTMG92ccdI2AT6/1XrlFWnqP6AmcvefctEbZpRaYLgq9PjH2GMlfF4oCp+50EajMN/5ByAlrLtcscPYc+uLAC2myPh2e9miY3wAwOmA2FROcTafv7/ixYGQcobkDmJmR8eAtuaOgh37eaQZ+CATtqtEhRx7o+gcCTWCZJEe5Hz6UD8RwyofqRN7Pf2NNh97b8tO9mPXcwxdTib13VfAeuWd7xB1oxwMFdPR4aqEdhoJbQ9S7ZJCiEkl2LJw7LDuPuXyPA6df8pdgD1jJhcsiDEf8B+TU+Nh12gHGtxT86Ucz6mpi8NZAeUJExdrDfSWngCVrOm0kZvfTYAJSdq4HAgMBAAEwDQYJKoZIhvcNAQELBQADggEBAGahyenW+E5YODaRed7CsRr4SpKn23pxIh99tYNMUQT9PlYQuQD0ul2AUgMHwhdsrZ4Soi+FV4KBXoKCODK1f7NONpnn3sP9G3fuVHZrZJHCIH6o06mlQFFLLv7PXTiC7UoWh1cAJUv7aaSCO67uhX77vdCRS7SikrW06oSy3YmZOgjyVZFGA2OzueKUzB/E366bd72dTUaY6dPMLpbBbLlbuxqmL685SinihIT6+f64P8mOyFtKmk636EKhnIFfjyxh3ZNm+RGjFJRtVSF15HyIWE5mVGYsLBnm2EzU20PF6DofYwNnVBtg/pxAqNEMWULnApNRlXkMVPz55iTgTdw=";
+
+                string samlCertificate = _iconfiguration["SsoLogin:samlCertificate"];
+                //"MIIGITCCBQmgAwIBAgIQTb8kNY7PZ5Vm/bxZAAWWRDANBgkqhkiG9w0BAQsFADB+MQswCQYDVQQGEwJVUzEdMBsGA1UEChMUU3ltYW50ZWMgQ29ycG9yYXRpb24xHzAdBgNVBAsTFlN5bWFudGVjIFRydXN0IE5ldHdvcmsxLzAtBgNVBAMTJlN5bWFudGVjIENsYXNzIDMgU2VjdXJlIFNlcnZlciBDQSAtIEc0MB4XDTE3MTEwMjAwMDAwMFoXDTE4MTIxNzIzNTk1OVowgZ4xCzAJBgNVBAYTAlVTMQ0wCwYDVQQIDARPaGlvMRkwFwYDVQQHDBBNYXlmaWVsZCBWaWxsYWdlMSQwIgYDVQQKDBtUaGUgUHJvZ3Jlc3NpdmUgQ29ycG9yYXRpb24xGjAYBgNVBAsMEU5QLVNTTC1GZWRlcmF0aW9uMSMwIQYDVQQDDBpkZXYtcGdyc3RzLnByb2dyZXNzaXZlLmNvbTCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBAK9qpi0tzu8NNpVpNlFjhw/84/vWT5v609MJwgIkN7+EuLThVzneTclDrr9yYyoz1ePQDx0LIJVdFr35th/f6ZWWLFr6aKQqC5DG3YOT1GIjC5IJBOTN5UM++0JHvVRkRyygXwYpet5TGRHHsZCJWFul0ezZ+ZeNTm+PhVL4aTyFsAEX5C2rXjqHyM/OEyuYoWeHvLAliacwF1/aKR72pt1vUD0AD3Aghu/eggsQNoV3WL41VzSE88uQuG4Lq9F0HG4f9Q4Plxp3qDa9l65w/BKHrqsq52pT49CvrHFvuxWwN8k6/qWxeieAocF2Q6cywgAQtlvDB83ciW9A6M9OwIkCAwEAAaOCAngwggJ0MCUGA1UdEQQeMByCGmRldi1wZ3JzdHMucHJvZ3Jlc3NpdmUuY29tMAkGA1UdEwQCMAAwDgYDVR0PAQH/BAQDAgWgMB0GA1UdJQQWMBQGCCsGAQUFBwMBBggrBgEFBQcDAjBhBgNVHSAEWjBYMFYGBmeBDAECAjBMMCMGCCsGAQUFBwIBFhdodHRwczovL2Quc3ltY2IuY29tL2NwczAlBggrBgEFBQcCAjAZDBdodHRwczovL2Quc3ltY2IuY29tL3JwYTAfBgNVHSMEGDAWgBRfYM9hkFXfhEMUimAqsvV69EMY7zArBgNVHR8EJDAiMCCgHqAchhpodHRwOi8vc3Muc3ltY2IuY29tL3NzLmNybDBXBggrBgEFBQcBAQRLMEkwHwYIKwYBBQUHMAGGE2h0dHA6Ly9zcy5zeW1jZC5jb20wJgYIKwYBBQUHMAKGGmh0dHA6Ly9zcy5zeW1jYi5jb20vc3MuY3J0MIIBBQYKKwYBBAHWeQIEAgSB9gSB8wDxAHcA3esdK3oNT6Ygi4GtgWhwfi6OnQHVXIiNPRHEzbbsvswAAAFffnJEJQAABAMASDBGAiEA3qS97Yrpi2qIPRO2dlF7pOlo+8C/yqnjbu7Qcq4fpSoCIQCvh3CDC5Onm2g1sYRDoiqD3zpkHL+RLUFgc3Xte9YJMgB2AKS5CZC0GFgUh7sTosxncAo8NZgE+RvfuON3zQ7IDdwQAAABX35yRF8AAAQDAEcwRQIhAPoiH0PApwxkraeD2txUUB6EfHrB0W5d3qqojOdiEKzVAiA5qV/SsRy0FsvwOjzZIwoXy8QDBd8zLeEpccLSXAnpNDANBgkqhkiG9w0BAQsFAAOCAQEAp+NbTuaLdFt4rhzFlSslzIPNzYO5uAbOlDG060VO21AXa+FheDrt/Rl1cpiPtSZZ55lz7hjoTNTca9WrkRzrvaAf+CEPlwfVvJ+gnvTnCkcrTfg8SRlYX/eNWh6BzX8wAOvYNhErUo9FlLS40CD+47I2Ands7rjr0UOTt+7+tp6PKHXJMenLjvbvzB6K23t4fXWCENZaHE7kmQTRQjuW9h3rvrIdLT1I8DlR97lgylNBKA0JPJzr5+oBdlVMdeFTnRJLGR4vczMzySLid9LGHqCxnGitUiOQcg/wviHsxQWSR71ZX+RWiTSEcj/2zc4oyMSL2x8wtAHERRjX6TFq5g==";
+
+                Saml.Response samlResponse = new Saml.Response(samlCertificate);
+                try
+                {
+                    //repos.LogInfo("ProgressiveResponse SSO SAML response from ADFS server: " +
+                    //    Request != null && Request.Form != null && !string.IsNullOrEmpty(Request.Form["SAMLResponse"]) ? Request.Form["SAMLResponse"].ToString() : " SAMLResponse is NULL ",
+                    //    Dns.GetHostName());
+
+                    samlResponse.LoadXmlFromBase64(Request.Form["SAMLResponse"]); //SAML providers usually POST the data into this var
+
+                    //repos.LogInfo("ProgressiveResponse SSO SAML response from ADFS server 2 : " + samlResponse != null ? samlResponse.Xml : "samlResponse is null", Dns.GetHostName());
+                }
+                catch (Exception ex)
+                {
+                    //Add error log                
+                    repos.LogError(new ProcessErrorLog
+                    {
+                        ExceptionMessage = "Error while reading SAML response from Progressive, Message: " + ex.Message,
+                        InnerExceptionMessage = ex.InnerException != null ? ex.InnerException.ToString() : string.Empty,
+                        StackTrace = ex.StackTrace,
+                        MethodName = "Login/ProgressiveResponse",
+                        ComputerName = Dns.GetHostName()
+                    });
+                }
+                if (samlResponse.IsValid())
+                {
+                    //User is logged in at this moment
+                    //lets extract username/firstname etc
+                    string username, email;     //, firstname, lastname;
+                    username = samlResponse.GetNameID();
+                    email = samlResponse.GetEmail();
+                    //firstname = samlResponse.GetFirstName();
+                    //lastname = samlResponse.GetLastName();
+
+                    //repos.LogInfo(
+                    //    "ProgressiveResponse info Log email: " + email + "; username:" + username,
+                    //    Dns.GetHostName()
+                    //);
+
+                    // Now Login business logic goes here.
+                    //user has been authenticated
+
+                    //// here is the code you will need to log in the user and create their session based on user name (because there is no user id here...)
+
+                    TempData["SessionInfo"] = null;
+                    // convert the email id to LP user id
+
+                    return await AuthenticateSSOUser(samlResponse.Xml);
+                }
+                else
+                {
+                    repos.LogError(new ProcessErrorLog
+                    {
+                        ExceptionMessage = "SAML response is not validated " + samlResponse != null ? samlResponse.Xml : "samlResponse is null",
+                        InnerExceptionMessage = string.Empty,
+                        StackTrace = null,
+                        MethodName = "Login/ProgressiveResponse",
+                        ComputerName = Dns.GetHostName()
+                    });
+                }
+                return RedirectToAction("Index", "Home");
+            }
+            catch (Exception ex)
+            {
+                //Add error log                
+                repos.LogError(new ProcessErrorLog
+                {
+                    ExceptionMessage = ex.Message,
+                    InnerExceptionMessage = ex.InnerException != null ? ex.InnerException.ToString() : string.Empty,
+                    StackTrace = ex.StackTrace,
+                    MethodName = "Login/ProgressiveResponse",
+                    ComputerName = Dns.GetHostName()
+                });
+                //return null;
+                //return View("Login");
+                return RedirectToAction("About", "Home");
+            }
+
+            //return RedirectToAction("Index", "Home");
+        }
+
+
+        /// <summary>
+        /// PROGRESSIVE - SSO Method
+        /// </summary>
+        /// <param name="samlXml"></param>
+        /// <returns></returns>
+        public async Task<IActionResult> AuthenticateSSOUser(string samlXml)
+        {
+            ////IRepository repos = new Repository(_connectionString);
+            try
+            {
+                var userInfo = new LoginDetail();
+                var validationValues = await repos.GetLoginInfoForSSOUser(samlXml);
+                userInfo = repos.GetLoginDetailsByUserId(validationValues.UserId);
+
+                if (userInfo != null)
+                {
+                    string ipAddress = HttpContext.Connection.RemoteIpAddress.MapToIPv4().ToString();
+                    string proxyIpAddress = HttpContext.Connection.RemoteIpAddress.MapToIPv4().ToString();
+                    if (Request.Headers.ContainsKey("X-Forwarded-For"))
+                    {
+                        if ((Request.Headers["X-Forwarded-For"].ToString() != null) && (Request.Headers["X-Forwarded-For"].ToString() != ""))
+                        {
+
+
+
+                            ipAddress = Request.Headers["X-Forwarded-For"].ToString().Split(',')[0];
+                            proxyIpAddress = Request.Headers["X-Forwarded-For"].ToString();
+
+                        }
+
+                    }
+                    //End getting the IP ADDRESS
+
+
+                    //CREATE A USER SESSION
+                    userInfo.CurrentSession = await repos.CreateSession(validationValues.UserId, ipAddress, proxyIpAddress);
+                    //END CREATING THE USER SESSION
+                    userInfo.Name = Convert.ToString(userInfo.FirstName) + " " + Convert.ToString(userInfo.LastName);
+                    userInfo.Version = _iconfiguration["Version:Number"];
+                    userInfo.CurrentSession.LastActionTime = DateTime.UtcNow;
+                    userInfo.CurrentSession.ShowNewCarrierDesign = ShowNewCarrierDesign();
+                    userInfo.IsAdmin = validationValues.IsAdministrator;
+                    userInfo.IsSupervisor = validationValues.IsSupervisor;
+                    userInfo.IsDemoUser = validationValues.IsDemoUser;
+
+                    TempData.Put("SessionInfo", userInfo.CurrentSession);
+                    TempData.Keep();
+
+                    var currentPOIdGuideWireSSO = TempData.Peek<SessionDetail>("CurrentPOIdGuideWireSSO");
+                    TempData.Put("CurrentPOIdGuideWireSSO", currentPOIdGuideWireSSO);
+                    TempData.Keep();
+
+                    return UserAuthenticated();
+                }
+                else
+                {
+                    //User info for SSO useer cannot be null as per business scenario so treat it as error
+                    repos.LogInfo("ProgressiveResponse info log SSO response - User info is null for  samlXML: " + samlXml, Dns.GetHostName());
+                    return RedirectToAction("Contact", "Home");
+                }
+            }
+            catch (Exception ex)
+            {
+                repos.LogError(new ProcessErrorLog
+                {
+                    ExceptionMessage = ex.Message,
+                    InnerExceptionMessage = ex.InnerException != null ? ex.InnerException.ToString() : string.Empty,
+                    StackTrace = ex.StackTrace,
+                    MethodName = "Login/AuthenticateSSOUser",
+                    ComputerName = Dns.GetHostName()
+                });
+                return RedirectToAction("Login", "Login");
+            }
+        }
+
+        public async Task<IActionResult> ProgressiveSSOTestResponse()
+        {
+            ////IRepository repos = new Repository(_connectionString);
+            try
+            {
+                if (Request != null && Request.Method == "POST" && Request.Form != null)
+                {
+                    var firstName = Request.Form["FirstName"].ToString();
+                    var lastName = Request.Form["LastName"].ToString();
+                    var phoneNumber = Request.Form["PhoneNumber"].ToString();
+                    var title = Request.Form["Title"].ToString();
+                    var state = Request.Form["State"].ToString();
+                    var userId = Request.Form["USER_ID"].ToString();
+                    var emailAddress = Request.Form["emailaddress"].ToString();
+                    var supervisorId = Request.Form["SUPV_ID"].ToString();
+                    var token = Request.Form["Token"].ToString();
+
+                    var configToken = _iconfiguration["SsoLogin:SsoTestHarnessToken"];
+
+                    if (configToken == token)
+                    {
+
+                        var samlXML = string.Format("<samlp:Response ID=\"test\" Version=\"2.0\" IssueInstant=\"2018 - 10 - 12T18: 51:04.872Z\" " +
+                            "Destination=\"https://qas-loanpayoff.iaai.com/Login/ProgressiveResponse\" Consent=\"urn:oasis:names:tc:SAML:2.0:consent:unspecified\" " +
+                            "InResponseTo=\"_a4f89744-f56f-43c2-95ae-a5550809130a\" xmlns:samlp=\"urn:oasis:names:tc:SAML:2.0:protocol\"><Issuer xmlns=\"urn:oasis:names:tc:SAML:2.0:assertion\">" +
+                            "http://dev-pgrlogin.progressive.com/adfs/services/trust</Issuer><samlp:Status><samlp:StatusCode Value=\"urn:oasis:names:tc:SAML:2.0:status:Success\" />" +
+                            "</samlp:Status><Assertion ID=\"_d530d90d-3d8e-4864-8d33-968ae8e61119\" IssueInstant=\"2018-10-12T18:51:04.872Z\" Version=\"2.0\" " +
+                            "xmlns=\"urn:oasis:names:tc:SAML:2.0:assertion\"><Issuer>http://dev-pgrlogin.progressive.com/adfs/services/trust</Issuer><ds:Signature " +
+                            "xmlns:ds=\"http://www.w3.org/2000/09/xmldsig#\"><ds:SignedInfo><ds:CanonicalizationMethod Algorithm=\"http://www.w3.org/2001/10/xml-exc-c14n#\" />" +
+                            "<ds:SignatureMethod Algorithm=\"http://www.w3.org/2000/09/xmldsig#rsa-sha1\" /><ds:Reference URI=\"#_d530d90d-3d8e-4864-8d33-968ae8e61119\"><ds:Transforms>" +
+                            "<ds:Transform Algorithm=\"http://www.w3.org/2000/09/xmldsig#enveloped-signature\" /><ds:Transform Algorithm=\"http://www.w3.org/2001/10/xml-exc-c14n#\" />" +
+                            "</ds:Transforms><ds:DigestMethod Algorithm=\"http://www.w3.org/2000/09/xmldsig#sha1\" /><ds:DigestValue>yvx6E65ELGTDMylBmStCAAEpz3w=</ds:DigestValue>" +
+                            "</ds:Reference></ds:SignedInfo><ds:SignatureValue>SignatureValue</ds:SignatureValue><KeyInfo xmlns=\"http://www.w3.org/2000/09/xmldsig#\"><ds:X509Data>" +
+                            "<ds:X509Certificate>CertificateValue</ds:X509Certificate></ds:X509Data></KeyInfo></ds:Signature><Subject><NameID Format=\"urn:oasis:names:tc:SAML:2.0:" +
+                            "nameid-format:transient\">A110990@progressive.com</NameID><SubjectConfirmation Method=\"urn:oasis:names:tc:SAML:2.0:cm:bearer\"><SubjectConfirmationData " +
+                            "InResponseTo=\"_a4f89744-f56f-43c2-95ae-a5550809130a\" NotOnOrAfter=\"2018-10-12T18:56:04.872Z\" Recipient=\"" +
+                            "https://qas-loanpayoff.iaai.com/Login/ProgressiveResponse\" /></SubjectConfirmation></Subject><Conditions NotBefore=\"2018-10-12T18:51:04.872Z\" " +
+                            "NotOnOrAfter=\"2018-10-12T19:51:04.872Z\"><AudienceRestriction><Audience>https://qas-loanpayoff.iaai.com</Audience></AudienceRestriction></Conditions>" +
+                            "<AttributeStatement><Attribute Name=\"First Name\"><AttributeValue>{0}</AttributeValue></Attribute>" +
+                            "<Attribute Name=\"Last Name\"><AttributeValue>{1}</AttributeValue></Attribute>" +
+                            "<Attribute Name=\"PhoneNumber\"><AttributeValue>{2}</AttributeValue></Attribute>" +
+                            "<Attribute Name=\"Title\"><AttributeValue>{3}</AttributeValue></Attribute>" +
+                            "<Attribute Name=\"State\"><AttributeValue>{4}</AttributeValue></Attribute>" +
+                            "<Attribute Name=\"USER_ID\"><AttributeValue>{5}</AttributeValue></Attribute>" +
+                            "<Attribute Name=\"http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress\"><AttributeValue>{6}</AttributeValue></Attribute>" +
+                            "<Attribute Name=\"SUPV_ID\"><AttributeValue>{7}</AttributeValue></Attribute></AttributeStatement><AuthnStatement AuthnInstant=\"2018-10-12T18:51:04.794Z\" " +
+                            "SessionIndex=\"_d530d90d-3d8e-4864-8d33-968ae8e61119\"><AuthnContext><AuthnContextClassRef>urn:federation:authentication:windows</AuthnContextClassRef>" +
+                            "</AuthnContext></AuthnStatement></Assertion></samlp:Response>", firstName, lastName, phoneNumber, title, state, userId, emailAddress, supervisorId);
+                        return await AuthenticateSSOUser(samlXML);
+                    }
+                    else
+                    {
+                        repos.LogError(new ProcessErrorLog
+                        {
+                            ExceptionMessage = "Invalid use of ProgressiveSSOTestHarness page, token does not match, values passed in: firstName=" + firstName + "; lastName=" + lastName +
+                                            "; phoneNumber=" + phoneNumber + "; title=" + title + "; state=" + state + "; userId=" + userId + "; emailAddress=" + emailAddress +
+                                            "; supervisorId=" + supervisorId + "; token=" + token,
+                            InnerExceptionMessage = null,
+                            StackTrace = null,
+                            MethodName = "Login/ProgressiveSSOTestResponse",
+                            ComputerName = Dns.GetHostName()
+                        });
+                    }
+                }
+
+            }
+            catch (Exception ex)
+            {
+                repos.LogError(new ProcessErrorLog
+                {
+                    ExceptionMessage = ex.Message,
+                    InnerExceptionMessage = ex.InnerException != null ? ex.InnerException.ToString() : string.Empty,
+                    StackTrace = ex.StackTrace,
+                    MethodName = "Login/ProgressiveSSOTestResponse",
+                    ComputerName = Dns.GetHostName()
+                });
+                return RedirectToAction("Login", "Login");
+
+            }
+            return RedirectToAction("About", "Home");
+        }
+
+
+        //New Method to db call to verify - "create new user"/"validate existing user"
+        /// <summary>
+        /// GENERIC - SSO Method
+        /// </summary>
+        /// <param name="ssoLoginRequest"></param>
+        /// <returns></returns>
+        public async Task<ActionResult> SsoValidate(SsoLoginRequest ssoLoginRequest)
+        {
+            try
+            {
+                var isSsoLogin = true;
+                var correlationId = string.IsNullOrEmpty(ssoLoginRequest.CorrelationId) ? Guid.NewGuid().ToString() : ssoLoginRequest.CorrelationId;
+                //svar userInfo = repos.GetSSOVerification(ssoLoginRequest);
+                var validationValues = await repos.GetSSOVerification(ssoLoginRequest);
+                var userInfo = repos.GetLoginDetailsByUserId(validationValues.UserId, true);
+                var ssoReqJson = Newtonsoft.Json.JsonConvert.SerializeObject(ssoLoginRequest);
+                var appInsightLog = new AppInsightLog
+                {
+                    StepNo = "2",
+                    StepName = "SsoValidate",
+                    FileName = "LoginController",
+                    MethodName = "SsoValidate",
+                    CorrelationId = correlationId,
+                    RequestJson = ssoReqJson,
+                    IdpName = ssoLoginRequest.IdpId,
+                    UserId = ""
+                };
+                new AppInsightLogHelper(_iconfiguration, repos).InsertAppInsightLog(appInsightLog);
+
+
+                string authenticated = CommonConstants.InvalidUserLoginMessage;
+                string ipAddressErrorMessage = string.Empty;
+                bool filterIP = false;
+                //LoginDetail userInfo = new LoginDetail();
+                LoginDetail userInfoIPRangecheck = new LoginDetail();
+
+                // get user login information from the db to compare to input values
+               // var validationValues = await repos.GetSSOVerification(ssoLoginRequest);
+                //await repos.GetLoginInfoByUserName(ssoLoginRequest.UserId);
+
+
+                dynamic MPmatch = "";
+                string ipAddress = HttpContext.Connection.RemoteIpAddress.MapToIPv4().ToString();
+                string proxyIpAddress = HttpContext.Connection.RemoteIpAddress.MapToIPv4().ToString();
+                if (Request.Headers.ContainsKey("X-Forwarded-For"))
+                {
+                    if (!string.IsNullOrEmpty(Request.Headers["X-Forwarded-For"].ToString()))
+                    {
+                        ipAddress = Request.Headers["X-Forwarded-For"].ToString().Split(',')[0];
+                        proxyIpAddress = Request.Headers["X-Forwarded-For"].ToString();
+
+                    }
+                }
+
+                //End getting the IP ADDRESS
+                short maxLockout = CommonConstants.DefaultMaxLockOutAttempt;
+                if (validationValues != null && validationValues.UserMaxLockoutLimit > 0)
+                {
+                    maxLockout = validationValues.UserMaxLockoutLimit;
+                }
+                //var encryptPassword = new Areas.LpAdmin.Controllers.WorkListController(_iconfiguration);
+
+                if (!string.IsNullOrEmpty(validationValues?.UserName))
+                {
+                    // var pw = ssoLoginRequest.IsEncrypt ? ssoLoginRequest.Password : EncryptPassWord(loginParams.Password + validationValues.Salt);
+                    var environment = new SessionFilter().ConfigureEnvironment();
+                    if (validationValues.IsDemoUser && environment.ToLower() == "prd")
+                    {
+                        authenticated = CommonConstants.InvalidUserLoginMessage;
+                    }
+                    else if (validationValues.IsAdminLockout)
+                    {
+                        authenticated = CommonConstants.UserAccountLockedOutMessage;
+                    }
+                    else if (!validationValues.IsActive && !validationValues.IsAdminLockout)
+                    {
+                        if (validationValues.IsSuperAdmin || validationValues.IsAdministrator)
+                        {
+                            authenticated = CommonConstants.UserAccountInactiveMessage;
+                        }
+                        else if (validationValues.IsSupervisor)
+                        {
+                            authenticated = CommonConstants.SupervisorAccountInactiveMessage;
+                        }
+                        else
+                        {
+                            authenticated = CommonConstants.UserAccountInactiveMessage;
+                        }
+                    }
+                    else if (validationValues.UserName == ssoLoginRequest.EmailAddress)
+                    {
+                        authenticated = "";
+
+                        var uudetails = repos.GetLoginDetailsByUserId(validationValues.UserId, true);
+                        userInfoIPRangecheck = repos.GetIPRangeCheckDetailsByUserId(validationValues.UserId, true, ipAddress); //Checking IPAddress exist in IPwhitelisting range
+
+                        if (userInfo != null && validationValues.IsActive && !validationValues.IsAdminLockout)
+                        {
+                            var userType = (!string.IsNullOrEmpty(userInfo.CarrierHeader) ? userInfo.CarrierHeader :
+                                            (!string.IsNullOrEmpty(userInfo.LenderHeader) ? userInfo.LenderHeader : (
+                                            !string.IsNullOrEmpty(userInfo.DealerHeader) ? userInfo.DealerHeader : string.Empty
+                                            ))).Trim();
+                            //check if the request is coming from authorized IP address
+                            if (!userInfo.IsSuperadmin && (userInfo.WhitelistedIPAddresses != null || userInfoIPRangecheck.IPAddressRangeExist != null)
+                                && (userInfo.WhitelistedIPAddresses.Count > 0))
+                            {
+                                List<AppParameters> appParms = repos.GetAppParameters("IPFiltering", "");
+
+                                if (appParms != null && appParms.Count > 0)
+                                {
+                                    filterIP = appParms.Where(a => a.ParamterName == "Active Status").Select(m => m.ParamterValue).FirstOrDefault() == "1";
+                                }
+
+                                if (!string.IsNullOrEmpty(ipAddress)
+                                    && ipAddress != "0.0.0.1" //added to allow local debugging
+                                    && filterIP)
+                                {
+                                    if (ipAddress.Contains(':'))
+                                    {
+                                        var address = ipAddress.Trim().Split(':');
+                                        ipAddress = address[0].Trim();
+                                    }
+
+                                    var matchedIPs = userInfo.WhitelistedIPAddresses.Where(ip => ip == ipAddress).ToList();
+                                    MPmatch = Convert.ToString(matchedIPs.Count);
+                                    if (matchedIPs.Count == 0 && (userInfoIPRangecheck.IPAddressRangeExist != null && (userInfoIPRangecheck.IPAddressRangeExist.IsIPRangeExists == false || userInfoIPRangecheck.IPAddressRangeExist.IsIPRangeExists == null)))//not matching valid IP entries
+                                    {
+                                        ipAddressErrorMessage = string.Format(CommonConstants.IPAddressInvalidMessage
+                                            , userType);
+                                    }
+                                }
+                            }
+                            //This case exist when range exist and indivisual ip does not exist
+                            if (userInfo.WhitelistedIPAddresses.Count == 0 && MPmatch == "" && userInfoIPRangecheck.IPAddressRangeExist != null && userInfoIPRangecheck.IPAddressRangeExist.IsIPRangeExists == false)
+                            {
+                                MPmatch = "0";
+                            }
+                            if (!userInfo.IsSuperadmin &&
+                                  (userInfoIPRangecheck.IPAddressRangeExist != null && userInfoIPRangecheck.IPAddressRangeExist.IsIPRangeExists != null && userInfoIPRangecheck.IPAddressRangeExist.IsIPRangeExists == false && (MPmatch == "0")))
+                            {
+
+                                List<AppParameters> appParms = repos.GetAppParameters("IPFiltering", "");
+
+                                if (appParms != null && appParms.Count > 0)
+                                {
+                                    filterIP = appParms.Where(a => a.ParamterName == "Active Status").Select(m => m.ParamterValue).FirstOrDefault() == "1";
+                                }
+
+                                if (!string.IsNullOrEmpty(ipAddress)
+                                    && ipAddress != "0.0.0.1" //added to allow local debugging
+                                    && filterIP)
+                                {
+                                    if (ipAddress.Contains(':'))
+                                    {
+                                        var address = ipAddress.Trim().Split(':');
+                                        ipAddress = address[0].Trim();
+                                    }
+
+
+
+                                    if (userInfoIPRangecheck.IPAddressRangeExist != null && userInfoIPRangecheck.IPAddressRangeExist.IsIPRangeExists == false)
+                                    {
+                                        ipAddressErrorMessage = string.Format(CommonConstants.IPAddressInvalidMessage
+                                            , userType);
+
+                                    }
+
+                                }
+
+                            }
+
+
+                            if (string.IsNullOrEmpty(ipAddressErrorMessage))
+                            {
+                                if (validationValues.SSOLogging)
+                                {
+                                    authenticated = CommonConstants.SSOInactiveMessage;
+                                }
+                                if (string.IsNullOrEmpty(authenticated))
+                                {
+                                    //CREATE A USER SESSION
+                                    //userInfo.CurrentSession = await repos.CreateSession(validationValues.UserId, ipAddress, proxyIpAddress);
+                                    //END CREATING THE USER SESSION
+
+                                    // we need to do something with session here, but we need to see what...
+                                    userInfo.Name = Convert.ToString(userInfo.FirstName) + " " + Convert.ToString(userInfo.LastName);
+                                    ////userInfo.Token = tokenString;
+                                    userInfo.Version = _iconfiguration["Version:Number"];
+                                    //userInfo.MaxTimeOut = 120;
+                                    userInfo.CurrentSession.LastActionTime = DateTime.UtcNow;
+                                    userInfo.CurrentSession.ShowNewCarrierDesign = ShowNewCarrierDesign();
+                                    TempData.Put("SessionInfo", userInfo.CurrentSession);
+                                    TempData.Keep();
+                                }
+                            }
+                            else
+                            {
+                                authenticated = ipAddressErrorMessage;
+                            }
+                        }
+                    }
+                    else if (validationValues.LoginAttemptCount == (maxLockout - 1))
+                    {
+                        authenticated = CommonConstants.UserAccountLockoutWarning;
+                    }
+                    else if (validationValues.LoginAttemptCount > (maxLockout - 1) || !validationValues.IsActive)
+                    {
+                        if (repos.LockoutUserAccount(validationValues.UserName, maxLockout))//is a lockout
+                        {
+                            authenticated = CommonConstants.UserAccountLockingMessage;
+                        }
+                        else
+                        {
+                            if (validationValues.IsSuperAdmin || validationValues.IsAdministrator)
+                            {
+                                authenticated = CommonConstants.UserAccountInactiveMessage;
+                            }
+                            else if (validationValues.IsSupervisor)
+                            {
+                                authenticated = CommonConstants.SupervisorAccountInactiveMessage;
+                            }
+                            else
+                            {
+                                authenticated = CommonConstants.UserAccountInactiveMessage;
+                            }
+                        }
+
+                    }
+                    else
+                    {
+                        authenticated = CommonConstants.InvalidUserLoginMessage;
+                    }
+                }
+
+
+                // failed login attempt log
+                if (!string.IsNullOrEmpty(authenticated))
+                {
+                    repos.LogFailedLoginAttempt(validationValues.UserId, ipAddress);
+                    return Json(authenticated);
+                }
+                else
+                {
+                   return UserAuthenticated();
+                }
+                    
+
+                return Json(authenticated);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                //    if (userInfo != null)
+                //    {
+                //        if (Request.Headers.ContainsKey("X-Forwarded-For"))
+                //        {
+                //            if ((Request.Headers["X-Forwarded-For"].ToString() != null) && (Request.Headers["X-Forwarded-For"].ToString() != ""))
+                //            {
+                //                ipAddress = Request.Headers["X-Forwarded-For"].ToString().Split(',')[0];
+                //                proxyIpAddress = Request.Headers["X-Forwarded-For"].ToString();
+                //            }
+                //        }
+                //        //End getting the IP ADDRESS
+
+                //        //CREATE A USER SESSION
+                //        userInfo.CurrentSession = await repos.CreateSession(userInfo.UserId, ipAddress, proxyIpAddress,
+                //                                                               isSsoLogin, correlationId);
+                //        //END CREATING THE USER SESSION
+                //        userInfo.Name = Convert.ToString(userInfo.FirstName) + " " + Convert.ToString(userInfo.LastName);
+                //        //userInfo.Version = _iconfiguration["Version:Number"];
+                //        //userInfo.CurrentSession.LastActionTime = DateTime.UtcNow;
+                //        //userInfo.CurrentSession.ShowNewCarrierDesign = ShowNewCarrierDesign();
+
+                //        //TempData.Put("SessionInfo", userInfo.CurrentSession);
+                //        //TempData.Keep();
+                //        return UserAuthenticated();
+                //    }
+                //    else
+                //    {
+                //        //User info for SSO user cannot be null as per business scenario so treat it as error
+                //        repos.LogInfo("SSO response - User info is null for SSORequestJson: " + ssoReqJson, Dns.GetHostName());
+                //        return RedirectToAction("Contact", "Home");
+                //    }
+            }
+            catch (Exception ex)
+            {
+                repos.LogError(new ProcessErrorLog
+                {
+                    ExceptionMessage = ex.Message,
+                    InnerExceptionMessage = ex.InnerException != null ? ex.InnerException.ToString() : string.Empty,
+                    StackTrace = ex.StackTrace,
+                    MethodName = "Login/SsoValidate",
+                    ComputerName = Dns.GetHostName()
+                });
+                return RedirectToAction("Login", "Login");
+            }
+        }
+
+
+        private bool ShowNewCarrierDesign()
+        {
+
+            bool showNewDesign = false;
+            List<AppParameters> appParms = repos.GetAppParameters("NewUIDesign", "Carrier Dashboard Page");
+            if (appParms != null && appParms.Count > 0)
+            {
+                showNewDesign = appParms.Where(a => a.ParamterName == "Carrier Dashboard Page").Select(m => m.ParamterValue).FirstOrDefault() == "1";
+            }
+            return showNewDesign;
+        }
+
+
+        public ActionResult NewLogin()
+        {
+            return View("NewLogin");
+        }
+
+        [Authorize(AuthenticationSchemes = "Okta")]
+        public async Task<ActionResult> SsoSignIn()
+        {
+            var ssoLoginRequest = new SsoLoginRequest();
+            try
+            {
+                ClaimsIdentity identity = (ClaimsIdentity)HttpContext.User.Identity;
+
+                ssoLoginRequest.EmailAddress = identity.FindFirst(SsoConstants.UserName) != null ? identity.FindFirst(SsoConstants.UserName).Value : "";
+                ssoLoginRequest.IdpId = identity.FindFirst(SsoConstants.IdentityProviderId) != null ? identity.FindFirst(SsoConstants.IdentityProviderId).Value : "";
+
+                ssoLoginRequest.FirstName = identity.FindFirst(SsoConstants.FirstName) != null ? identity.FindFirst(SsoConstants.FirstName).Value : "";
+                ssoLoginRequest.LastName = identity.FindFirst(SsoConstants.LastName) != null ? identity.FindFirst(SsoConstants.LastName).Value : "";
+                ssoLoginRequest.Title = identity.FindFirst(SsoConstants.Title) != null ? identity.FindFirst(SsoConstants.Title).Value : "";
+                ssoLoginRequest.PrimaryPhone = identity.FindFirst(SsoConstants.PrimaryPhone) != null ? identity.FindFirst(SsoConstants.PrimaryPhone).Value : "";
+                ssoLoginRequest.MobilePhone = identity.FindFirst(SsoConstants.MobilePhone) != null ? identity.FindFirst(SsoConstants.MobilePhone).Value : "";
+                ssoLoginRequest.City = identity.FindFirst(SsoConstants.City) != null ? identity.FindFirst(SsoConstants.City).Value : "";
+                ssoLoginRequest.State = identity.FindFirst(SsoConstants.State) != null ? identity.FindFirst(SsoConstants.State).Value : "";
+                ssoLoginRequest.ZipCode = identity.FindFirst(SsoConstants.ZipCode) != null ? identity.FindFirst(SsoConstants.ZipCode).Value : "";
+
+                ssoLoginRequest.ManagerId = identity.FindFirst(SsoConstants.ManagerId) != null ? identity.FindFirst(SsoConstants.ManagerId).Value : "";
+                ssoLoginRequest.UserId = identity.FindFirst(SsoConstants.UserId) != null ? identity.FindFirst(SsoConstants.UserId).Value : "";
+
+                ssoLoginRequest.CorrelationId = identity.FindFirst(SsoConstants.CorrelationId) != null ? identity.FindFirst(SsoConstants.CorrelationId).Value : "";
+
+                var currentPOIdGuideWireSSO = TempData.Peek<string>("CurrentPOIdGuideWireSSO");
+                TempData.Put("CurrentPOIdGuideWireSSO", currentPOIdGuideWireSSO);
+                TempData.Keep();
+            }
+            catch (Exception ex)
+            {
+                repos.LogError(new ProcessErrorLog
+                {
+                    ExceptionMessage = ex.Message,
+                    InnerExceptionMessage = ex.InnerException != null ? ex.InnerException.ToString() : string.Empty,
+                    StackTrace = ex.StackTrace,
+                    MethodName = "Login/SsoSignIn",
+                    ComputerName = Dns.GetHostName()
+                });
+                return RedirectToAction("Login", "Login");
+            }
+            return await SsoValidate(ssoLoginRequest);
+            //return View("SsoSignIn");
+        }
+
+
+
+
+        public ActionResult SsoIdpSignIn()
+        {
+            return View("SsoIdpSignIn");
+        }
+
+        public ActionResult GetWebUrl()
+        {
+            var url = _iconfiguration["Session:BaseSiteUrl"];
+            return Json(new { weburl = url });
+        }
+
+
+        #region From CoreTrack
+        [IgnoreAntiforgeryToken]
+        public async Task<IActionResult> ViewPoIdDetails(Models.Admin.CoreTrackRequest obj)
+        {
+            try
+
+            {
+                if (obj != null && obj.PoId != 0)
+                {
+                    //var tokenResult = await ValidateUser(obj.Token,obj.UserName);
+                    if (await repos.isUserValid(obj.UserId, obj.UserName))
+                    {
+                        string ipAddress = HttpContext.Connection.RemoteIpAddress.MapToIPv4().ToString();
+                        string proxyIpAddress = HttpContext.Connection.RemoteIpAddress.MapToIPv4().ToString();
+                        if (Request.Headers.ContainsKey("X-Forwarded-For"))
+                        {
+                            if (!string.IsNullOrEmpty(Request.Headers["X-Forwarded-For"].ToString()))
+                            {
+                                ipAddress = Request.Headers["X-Forwarded-For"].ToString().Split(',')[0];
+                                proxyIpAddress = Request.Headers["X-Forwarded-For"].ToString();
+
+                            }
+                        }
+                        LoginDetail userInfo = new LoginDetail();
+                        userInfo = repos.GetLoginDetailsByUserId(obj.UserId, true);
+                        userInfo.CurrentSession = await repos.CreateSession(obj.UserId, ipAddress, proxyIpAddress);
+                        userInfo.Name = Convert.ToString(userInfo.FirstName) + " " + Convert.ToString(userInfo.LastName);
+                        userInfo.Version = _iconfiguration["Version:Number"];
+                        userInfo.CurrentSession.LastActionTime = DateTime.UtcNow;
+                        userInfo.CurrentSession.CoreTrackUserId = string.IsNullOrWhiteSpace(obj.UserName) ? "" : obj.UserName;
+                        userInfo.CurrentSession.IsCoreTrackUser = true;
+                        TempData.Put("SessionInfo", userInfo.CurrentSession);
+                        TempData.Put("CTRequest", obj);
+                        TempData.Keep();
+                        return RedirectToAction("ViewEditDetails", "PayoffRequest", new { area = nameof(Areas.Carrier) });
+                    }
+
+                }
+            }
+            catch (Exception ex)
+            {
+                repos.LogError(new ProcessErrorLog
+                {
+                    ExceptionMessage = ex.Message,
+                    InnerExceptionMessage = ex.InnerException != null ? ex.InnerException.ToString() : string.Empty,
+                    StackTrace = ex.StackTrace,
+                    MethodName = "Login/ViewPoIdDetails",
+                    ComputerName = Dns.GetHostName()
+                });
+            }
+            return RedirectToAction("Login", "Login");
+        }
+
+
+        private async Task<ValidatePasswordResult> ValidateUser(string token, string userName)
+        {
+            var response = new ValidatePasswordResult()
+            {
+                IsValid = false
+            };
+
+            try
+            {
+                string incoming = token.Replace('_', '/').Replace('-', '+');
+                switch (token.Length % 4)
+                {
+                    case 2: incoming += "=="; break;
+                    case 3: incoming += "="; break;
+                }
+                var bytes = Convert.FromBase64String(incoming);
+
+                //var unprotectedData = _idataProtector.Unprotect(bytes);
+                var unprotectedData = bytes;
+
+                var ms = new MemoryStream(unprotectedData);
+                using (var reader = new StreamReader(ms, Encoding.UTF8))
+                {
+                    var userPassword = reader.ReadLine();
+                    if (!string.IsNullOrEmpty(userPassword))
+                    {
+                        response.IsValid = true;
+                        response.Password = userPassword;
+                    }
+
+                    var creationTime = reader.ReadLine();
+                    DateTimeOffset dateTimeResult;
+                    DateTimeOffset.TryParse(creationTime, out dateTimeResult);
+                    var expirationTime = dateTimeResult + TimeSpan.FromMinutes(100);
+                    if (expirationTime < DateTimeOffset.UtcNow)
+                    {
+                        response.IsValid = false;
+                    }
+
+                    var purp = reader.ReadLine();
+                    if (!string.IsNullOrEmpty(purp))//(!string.Equals(purp, purpose ?? "ResetPassword"))
+                    {
+                        response.Purpose = purp;
+                    }
+
+                    if (reader.Peek() != -1)
+                    {
+                        response.IsValid = false;
+                    }
+
+
+                    //if (!await repos.isUserValid(response.Password, userName))
+                    //{
+                    //    response.IsValid = false;
+
+                    //}
+                }
+            }
+            catch (Exception ex)
+            {
+                repos.LogError(new ProcessErrorLog
+                {
+                    ExceptionMessage = ex.Message,
+                    InnerExceptionMessage = ex.InnerException != null ? ex.InnerException.ToString() : string.Empty,
+                    StackTrace = ex.StackTrace,
+                    MethodName = nameof(ValidateUser),
+                    ComputerName = Dns.GetHostName()
+                });
+            }
+            return response;
+        }
+
+
+
+        #endregion From CoreTrack
+
+    }
+}

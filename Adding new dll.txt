@@ -1,0 +1,19 @@
+Open .vb project
+Make changes in respective dll copy, 
+https://dev.azure.com/devops-iaa/Provider%20Services/_git/CSAToday/pullrequest/155460?_a=files&path=/CSAT_Utils/My%20Project/AssemblyInfo.vb
+
+
+In thi sPr we are making a chang ein clsreport.vb
+so open CSAT_Utils.vbproj solution, make the change.
+save.
+Change the version in assemblyinfo.vb file in two place
+  C:\Users\srujan.reddy\Applications\CSAToday\CSAT_Utils\My Project
+
+save
+build
+Now copy the .dll from 
+C:\Users\srujan.reddy\Applications\CSAToday\CSAT_Utils\bin\Debug   > copy csat_utils.dll
+
+paste in C:\Users\srujan.reddy\Applications\CSAToday\WebApplication\_Libraries
+
+Now go to csa web application solution in VS. Add reference , we should see new reference created.
